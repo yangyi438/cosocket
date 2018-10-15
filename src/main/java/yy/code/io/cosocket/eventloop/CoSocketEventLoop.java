@@ -13,6 +13,7 @@ import io.netty.util.internal.ReflectionUtil;
 import io.netty.util.internal.SystemPropertyUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
+import yy.code.io.cosocket.CoSocketChannel;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -482,7 +483,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
         }
     }
 
-    void cancel(SelectionKey key) {
+    public void cancel(SelectionKey key) {
         key.cancel();
         cancelledKeys++;
         if (cancelledKeys >= CLEANUP_INTERVAL) {
