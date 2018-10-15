@@ -108,4 +108,9 @@ public class CoSocketEventLoopGroup extends MultithreadEventLoopGroup {
         return new CoSocketEventLoop(this, executor, (SelectorProvider) args[0],
             ((SelectStrategyFactory) args[1]).newSelectStrategy(), (RejectedExecutionHandler) args[2]);
     }
+
+    public CoSocketEventLoop nextCoSocketEventLoop() {
+       return (CoSocketEventLoop) next();
+    }
+
 }
