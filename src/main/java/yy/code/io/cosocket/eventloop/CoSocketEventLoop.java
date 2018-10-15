@@ -574,7 +574,14 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             if (eventLoop != this || eventLoop == null) {
                 return;
             }
-            ch.close();
+            //关闭channel
+            try {
+                ch.close();
+            } catch (Throwable closeErr) {
+                if (logger.isTraceEnabled()) {
+                    logger.trace("could not happen error{}", closeErr);
+                }
+            }
             return;
         }
 
