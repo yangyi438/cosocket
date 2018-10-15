@@ -583,12 +583,24 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             // We first need to call finishConnect() before try to trigger a readActive(...) or writeActive(...) as otherwise
             // the NIO JDK channel implementation may throw a NotYetConnectedException.
             if ((readyOps & SelectionKey.OP_CONNECT) != 0) {
-                ch.finishConnect();
+                try {
+                    ch.finishConnect();
+                } catch (Throwable ignore) {
+                    if (logger.isTraceEnabled()) {
+                        logger.trace("could not happen error{}", ignore);
+                    }
+                }
             }
 
             // Process OP_WRITE first as we may be able to writeActive some queued buffers and so free memory.
             if ((readyOps & SelectionKey.OP_WRITE) != 0) {
-                ch.writeActive();
+                try {
+                    ch.writeActive();
+                } catch (Throwable writeErr) {
+                    if (logger.isTraceEnabled()) {
+                        logger.trace("could not happen error{}", writeErr);
+                    }
+                }
             }
 
             // Also check for readOps of 0 to workaround possible JDK bug which may otherwise lead
@@ -598,34 +610,22 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
 //            }
             //我们这个不可能会有accept的,只有读的可能性
             if ((readyOps & SelectionKey.OP_READ) != 0 || readyOps == 0) {
-                ch.readActive();
+                try {
+                    ch.readActive();
+                } catch (Throwable readErr) {
+                    if (logger.isTraceEnabled()) {
+                        logger.trace("could not happen error{}", readErr);
+                    }
+                }
             }
         } catch (CancelledKeyException ignored) {
             //关闭channel
-            ch.close();
-        }
-    }
-
-    private static void processSelectedKey(SelectionKey k, NioTask<SelectableChannel> task) {
-        int state = 0;
-        try {
-            task.channelReady(k.channel(), k);
-            state = 1;
-        } catch (Exception e) {
-            k.cancel();
-            invokeChannelUnregistered(task, k, e);
-            state = 2;
-        } finally {
-            switch (state) {
-                case 0:
-                    k.cancel();
-                    invokeChannelUnregistered(task, k, null);
-                    break;
-                case 1:
-                    if (!k.isValid()) { // Cancelled by channelReady()
-                        invokeChannelUnregistered(task, k, null);
-                    }
-                    break;
+            try {
+                ch.close();
+            } catch (Throwable closeErr) {
+                if (logger.isTraceEnabled()) {
+                    logger.trace("could not happen error{}", closeErr);
+                }
             }
         }
     }
