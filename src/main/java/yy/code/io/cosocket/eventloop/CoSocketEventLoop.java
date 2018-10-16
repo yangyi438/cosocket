@@ -545,7 +545,16 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             selectedKeys.keys[i] = null;
 
             final Object a = k.attachment();
-            processSelectedKey(k, (CoSocketChannel) a);
+            //加上了我们的CoSocketChannel
+            if (a instanceof CoSocketChannel) {
+                processSelectedKey(k, (CoSocketChannel) a);
+            } else if (a instanceof AbstractNioChannel) {
+                processSelectedKey(k, (AbstractNioChannel) a);
+            } else {
+                @SuppressWarnings("unchecked")
+                NioTask<SelectableChannel> task = (NioTask<SelectableChannel>) a;
+                processSelectedKey(k, task);
+            }
             if (needsToSelectAgain) {
                 // null out entries in the array to allow to have it GC'ed once the Channel close
                 // See https://github.com/netty/netty/issues/2363
@@ -637,6 +646,86 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             }
         }
     }
+
+    private void processSelectedKey(SelectionKey k, AbstractNioChannel ch) {
+        final AbstractNioChannel.NioUnsafe unsafe = ch.unsafe();
+        if (!k.isValid()) {
+            final EventLoop eventLoop;
+            try {
+                eventLoop = ch.eventLoop();
+            } catch (Throwable ignored) {
+                // If the channel implementation throws an exception because there is no event loop, we ignore this
+                // because we are only trying to determine if ch is registered to this event loop and thus has authority
+                // to close ch.
+                return;
+            }
+            // Only close ch if ch is still registered to this EventLoop. ch could have deregistered from the event loop
+            // and thus the SelectionKey could be cancelled as part of the deregistration process, but the channel is
+            // still healthy and should not be closed.
+            // See https://github.com/netty/netty/issues/5125
+            if (eventLoop != this || eventLoop == null) {
+                return;
+            }
+            // close the channel if the key is not valid anymore
+            unsafe.close(unsafe.voidPromise());
+            return;
+        }
+
+        try {
+            int readyOps = k.readyOps();
+            // We first need to call finishConnect() before try to trigger a read(...) or write(...) as otherwise
+            // the NIO JDK channel implementation may throw a NotYetConnectedException.
+            if ((readyOps & SelectionKey.OP_CONNECT) != 0) {
+                // remove OP_CONNECT as otherwise Selector.select(..) will always return without blocking
+                // See https://github.com/netty/netty/issues/924
+                int ops = k.interestOps();
+                ops &= ~SelectionKey.OP_CONNECT;
+                k.interestOps(ops);
+
+                unsafe.finishConnect();
+            }
+
+            // Process OP_WRITE first as we may be able to write some queued buffers and so free memory.
+            if ((readyOps & SelectionKey.OP_WRITE) != 0) {
+                // Call forceFlush which will also take care of clear the OP_WRITE once there is nothing left to write
+                ch.unsafe().forceFlush();
+            }
+
+            // Also check for readOps of 0 to workaround possible JDK bug which may otherwise lead
+            // to a spin loop
+            if ((readyOps & (SelectionKey.OP_READ | SelectionKey.OP_ACCEPT)) != 0 || readyOps == 0) {
+                unsafe.read();
+            }
+        } catch (CancelledKeyException ignored) {
+            unsafe.close(unsafe.voidPromise());
+        }
+    }
+
+
+    private static void processSelectedKey(SelectionKey k, NioTask<SelectableChannel> task) {
+        int state = 0;
+        try {
+            task.channelReady(k.channel(), k);
+            state = 1;
+        } catch (Exception e) {
+            k.cancel();
+            invokeChannelUnregistered(task, k, e);
+            state = 2;
+        } finally {
+            switch (state) {
+                case 0:
+                    k.cancel();
+                    invokeChannelUnregistered(task, k, null);
+                    break;
+                case 1:
+                    if (!k.isValid()) { // Cancelled by channelReady()
+                        invokeChannelUnregistered(task, k, null);
+                    }
+                    break;
+            }
+        }
+    }
+
 
     private void closeAll() {
         selectAgain();
@@ -787,4 +876,8 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             logger.warn("Failed to update SelectionKeys.", t);
         }
     }
+
+    //fixme 这里添加了注册我们的CoSocketChannel
+
+
 }

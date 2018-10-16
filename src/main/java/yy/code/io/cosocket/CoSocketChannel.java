@@ -1,17 +1,26 @@
-package yy.code.io.cosocket.eventloop;
+package yy.code.io.cosocket;
 
+import io.netty.util.concurrent.GlobalEventExecutor;
+import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import yy.code.io.cosocket.client.CoSocket;
 import yy.code.io.cosocket.config.CoSocketConfig;
+import yy.code.io.cosocket.eventloop.CoSocketEventLoop;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledFuture;
 
 /**
  * Created by ${good-yy} on 2018/10/13.
+ */
+
+/**
+ * 写发生异常我们就直接关闭channel连接,保守性的解决方案
  */
 public final class CoSocketChannel {
 
@@ -24,7 +33,7 @@ public final class CoSocketChannel {
 
     boolean isEof = false;
 
-    CoSocketEventLoop eventLoop() {
+    public CoSocketEventLoop eventLoop() {
         return eventLoop;
     }
 
@@ -36,47 +45,40 @@ public final class CoSocketChannel {
     ScheduledFuture<?> connectTimeoutFuture;
     ScheduledFuture<?> readTimeoutFuture;
     ScheduledFuture<?> writeTimeoutFuture;
-    SelectionKey selectionKey;
+    public SelectionKey selectionKey;
+
+    public SocketChannel getChannel() {
+        return channel;
+    }
 
     //真实的channel nio的channel
-    SocketChannel channel;
+    private final SocketChannel channel;
 
-    boolean isActive() {
-        SocketChannel ch = channel;
-        return ch.isOpen() && ch.isConnected();
+    public static boolean isActive(SocketChannel channel) {
+        return channel.isOpen() && channel.isConnected();
     }
 
     public void finishConnect() {
         try {
             if (!channel.finishConnect()) {
-                throw new Error("could not happen ");
+                throw new IOException("finishConnect happen error");
             }
             //连接成功
             innerCoSocket.successConnect();
             int ops = selectionKey.interestOps();
             //关闭连接侦听位
             selectionKey.interestOps(ops & ~SelectionKey.OP_CONNECT);
-        } catch (Throwable e) {
+        } catch (IOException e) {
             try {
                 //fixme 关闭selectKey一定要使用这个方法
                 eventLoop.cancel(selectionKey);
                 channel.close();
-            } catch (Throwable error) {
+            } catch (IOException error) {
                 if (logger.isTraceEnabled()) {
                     logger.trace("connection channel error then close channel error{}", error);
                 }
             }
-            if (e instanceof IOException) {
-                //连接异常了
-                innerCoSocket.errorConnect((IOException) e);
-            } else {
-                if (logger.isWarnEnabled()) {
-                    logger.warn("error finishConnect not IOException {} ", e);
-                }
-                //语义上我们要确定抛出的异常是io异常
-                IOException ioException = new IOException(e);
-                innerCoSocket.errorConnect(ioException);
-            }
+            innerCoSocket.errorConnect(e);
         } finally {
             if (connectTimeoutFuture != null) {
                 //取消连接超时检测,或者其他的检测
@@ -146,6 +148,77 @@ public final class CoSocketChannel {
 
     //关闭当前的socket连接
     public void close() {
+        Executor executor = null;
+        try {
+            //对于SoLinger有特殊的处理的方法
+            if (channel.isOpen() && channel.socket().getSoLinger() > 0) {
+                eventLoop.cancel(selectionKey);
+            }
+            executor = GlobalEventExecutor.INSTANCE;
+        } catch (Throwable ignore) {
+
+        }
+        if (executor == null) {
+            safeClose(channel);
+        } else {
+            //另外一个线程来执行这个方法,netty是这样做的,不是很明白,可能是避免坑的原因
+            //先按照netty的来
+            executor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    safeClose(channel);
+                }
+            });
+        }
+    }
+
+    private static void safeClose(SocketChannel channel) {
+        try {
+            channel.close();
+        } catch (IOException e) {
+            if (logger.isInfoEnabled()) {
+                logger.info("close the channel happen error{}", e);
+            }
+        }
+    }
+
+    //fixme netty里面关闭OutPut是需要 cancel selectKey的 我们要考虑这个怎么实现,会不会触发select 不堵塞
+    public static void shutdownOutput(SocketChannel channel) throws IOException {
+        if (PlatformDependent.javaVersion() >= 7) {
+            channel.shutdownOutput();
+        } else {
+            channel.socket().shutdownOutput();
+        }
+    }
+
+    //关闭输入,由于netty的处理,读到eof或者读的时候发生异常,我们就要
+    //关闭整个连接,或者关闭整个input
+    //在我们的实现中,出现发生异常就要关闭整个连接
+    //eof就话就报告eof,
+    //fixme
+    public static void shutdownInput(SocketChannel channel) throws IOException {
+        if (PlatformDependent.javaVersion() >= 7) {
+            channel.shutdownInput();
+        } else {
+            channel.socket().shutdownInput();
+        }
+    }
+
+    public static boolean isShutdown(SocketChannel channel) {
+        Socket socket = channel.socket();
+        return socket.isInputShutdown() && socket.isOutputShutdown() || !isActive(channel);
+    }
+
+    public boolean isInputShutdown() {
+        return channel.socket().isInputShutdown() || !isActive(channel);
+    }
+
+    public boolean isOutputShutdown() {
+        return channel.socket().isOutputShutdown() || !isActive(channel);
+    }
+
+    //仅仅由CoSocket来调用
+    public void bind(InetSocketAddress inetSocketAddress) {
 
     }
 }
