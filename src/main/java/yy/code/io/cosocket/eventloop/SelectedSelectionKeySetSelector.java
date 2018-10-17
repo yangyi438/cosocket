@@ -21,11 +21,11 @@ import java.nio.channels.Selector;
 import java.nio.channels.spi.SelectorProvider;
 import java.util.Set;
 
-final class SelectedSelectionKeySetSelector extends Selector {
+public final class SelectedSelectionKeySetSelector extends Selector {
     private final SelectedSelectionKeySet selectionKeys;
     private final Selector delegate;
 
-    SelectedSelectionKeySetSelector(Selector delegate, SelectedSelectionKeySet selectionKeys) {
+    public SelectedSelectionKeySetSelector(Selector delegate, SelectedSelectionKeySet selectionKeys) {
         this.delegate = delegate;
         this.selectionKeys = selectionKeys;
     }

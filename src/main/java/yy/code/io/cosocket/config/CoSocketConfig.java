@@ -4,7 +4,7 @@ package yy.code.io.cosocket.config;
 /**
  * Created by ${good-yy} on 2018/10/7.
  */
-public class CoSocketConfig {
+public final class CoSocketConfig {
 
 
     //default 64k

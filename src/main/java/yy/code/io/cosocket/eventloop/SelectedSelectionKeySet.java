@@ -20,12 +20,12 @@ import java.util.AbstractSet;
 import java.util.Arrays;
 import java.util.Iterator;
 
-final class SelectedSelectionKeySet extends AbstractSet<SelectionKey> {
+public final class SelectedSelectionKeySet extends AbstractSet<SelectionKey> {
 
-    SelectionKey[] keys;
-    int size;
+    public SelectionKey[] keys;
+    public int size;
 
-    SelectedSelectionKeySet() {
+    public SelectedSelectionKeySet() {
         keys = new SelectionKey[1024];
     }
 
@@ -63,11 +63,11 @@ final class SelectedSelectionKeySet extends AbstractSet<SelectionKey> {
         throw new UnsupportedOperationException();
     }
 
-    void reset() {
+    public void reset() {
         reset(0);
     }
 
-    void reset(int start) {
+    public void reset(int start) {
         Arrays.fill(keys, start, size, null);
         size = 0;
     }

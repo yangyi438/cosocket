@@ -2,6 +2,7 @@
 package yy.code.io.cosocket.eventloop;
 
 import io.netty.channel.*;
+import io.netty.channel.nio.CoSocketEventLoop;
 import io.netty.util.concurrent.EventExecutor;
 import io.netty.util.concurrent.EventExecutorChooserFactory;
 import io.netty.util.concurrent.RejectedExecutionHandler;

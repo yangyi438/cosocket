@@ -1,11 +1,8 @@
 
-package yy.code.io.cosocket.eventloop;
+package io.netty.channel.nio;
 
 import io.netty.channel.*;
 import io.netty.channel.Channel;
-import io.netty.channel.nio.AbstractNioChannel;
-import io.netty.channel.nio.NioEventLoop;
-import io.netty.channel.nio.NioTask;
 import io.netty.util.IntSupplier;
 import io.netty.util.concurrent.RejectedExecutionHandler;
 import io.netty.util.internal.PlatformDependent;
@@ -14,6 +11,7 @@ import io.netty.util.internal.SystemPropertyUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import yy.code.io.cosocket.CoSocketChannel;
+import yy.code.io.cosocket.eventloop.CoSocketEventLoopGroup;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -91,7 +89,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
      */
     private Selector selector;
     private Selector unwrappedSelector;
-    private SelectedSelectionKeySet selectedKeys;
+    private yy.code.io.cosocket.eventloop.SelectedSelectionKeySet selectedKeys;
 
     private final SelectorProvider provider;
 
@@ -152,7 +150,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             return new SelectorTuple(unwrappedSelector);
         }
 
-        final SelectedSelectionKeySet selectedKeySet = new SelectedSelectionKeySet();
+        final yy.code.io.cosocket.eventloop.SelectedSelectionKeySet selectedKeySet = new yy.code.io.cosocket.eventloop.SelectedSelectionKeySet();
 
         Object maybeSelectorImplClass = AccessController.doPrivileged(new PrivilegedAction<Object>() {
             @Override
@@ -216,7 +214,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
         selectedKeys = selectedKeySet;
         logger.trace("instrumented a special java.util.Set into: {}", unwrappedSelector);
         return new SelectorTuple(unwrappedSelector,
-                new SelectedSelectionKeySetSelector(unwrappedSelector, selectedKeySet));
+                new yy.code.io.cosocket.eventloop.SelectedSelectionKeySetSelector(unwrappedSelector, selectedKeySet));
     }
 
     /**
@@ -338,7 +336,14 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
                 int interestOps = key.interestOps();
                 key.cancel();
                 SelectionKey newKey = key.channel().register(newSelectorTuple.unwrappedSelector, interestOps, a);
-                ((CoSocketChannel) a).selectionKey = newKey;
+                //fixme doSomeChange in base on netty
+                if (a instanceof CoSocketChannel) {
+                    CoSocketChannel channel = (CoSocketChannel) a;
+                    channel.selectionKey = newKey;
+                } else if (a instanceof AbstractNioChannel) {
+                    // Update SelectionKey
+                    ((AbstractNioChannel) a).selectionKey = newKey;
+                }
                 nChannels++;
             } catch (Exception e) {
                 logger.warn("Failed to re-register a Channel to the new Selector.", e);
@@ -346,8 +351,13 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
                     if (a instanceof CoSocketChannel) {
                         CoSocketChannel channel = (CoSocketChannel) a;
                         channel.close();
+                    } else if (a instanceof AbstractNioChannel) {
+                        AbstractNioChannel ch = (AbstractNioChannel) a;
+                        ch.unsafe().close(ch.unsafe().voidPromise());
                     } else {
-                        logger.warn("not a CoSocketChannel{}", a);
+                        @SuppressWarnings("unchecked")
+                        NioTask<SelectableChannel> task = (NioTask<SelectableChannel>) a;
+                        invokeChannelUnregistered(task, key, e);
                     }
                 } catch (Throwable error) {
                     if (logger.isTraceEnabled()) {
@@ -444,6 +454,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             try {
                 if (isShuttingDown()) {
                     closeAll();
+                    //todo shutDown方法要改变,适应我们的CoSocketChannel
                     if (confirmShutdown()) {
                         return;
                     }
@@ -877,7 +888,21 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
         }
     }
 
-    //fixme 这里添加了注册我们的CoSocketChannel
+
+    //fixme 这里添加了注册我们的CoSocketChannel,在netty的基础上修改的
+    public void register(final CoSocketChannel coChannel, final int interestOps) {
+        if (inEventLoop()) {
+            coChannel.coSocketChannelRegister(coChannel,selector, interestOps);
+        } else {
+            this.execute(new Runnable() {
+                @Override
+                public void run() {
+                    coChannel.coSocketChannelRegister(coChannel,selector, interestOps);
+                }
+            });
+        }
+    }
+
 
 
 }

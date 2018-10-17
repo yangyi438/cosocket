@@ -3,13 +3,18 @@ package yy.code.io.cosocket;
 
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import yy.code.io.cosocket.eventloop.CoSocketEventLoop;
+import yy.code.io.cosocket.config.CoSocketConfig;
+import io.netty.channel.nio.CoSocketEventLoop;
+import yy.code.io.cosocket.fiber.StrandSuspendContinueSupport;
+import yy.code.io.cosocket.status.BitIntStatusUtils;
+import yy.code.io.cosocket.status.CoSocketStatus;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.*;
 import java.nio.channels.SocketChannel;
+import java.util.concurrent.atomic.AtomicInteger;
 
 
 public final class CoSocket {
@@ -31,24 +36,35 @@ public final class CoSocket {
         return false;
     }
 
+    //发生了io异常就会记录这个异常,条件允许,我们会自动底层的channel
+    private IOException exception;
     private CoSocketEventLoop coSocketEventLoop;
     CoSocketChannel coChannel;
+    private StrandSuspendContinueSupport strandSuspendContinueSupport;
+    private AtomicInteger status = new AtomicInteger(0);
 
-
-    //抛出异常了,不满足jdk的Socket不抛出异常的要求
     public CoSocket() throws IOException {
-        initChannel();
+        initDefault();
     }
 
-    //初始化channel
-    private void initChannel() throws IOException {
+    private void initDefault() throws IOException {
+        initChannel(new CoSocketConfig(), CoSocketFactory.globalEventLoop.nextCoSocketEventLoop());
+    }
+
+    //初始化channel,eventLoop,StrandSuspendContinueSupport
+    private void initChannel(CoSocketConfig config, CoSocketEventLoop eventLoop) throws IOException {
         SocketChannel channel = null;
+        assert eventLoop != null;
         try {
             channel = SocketChannel.open();
             channel.configureBlocking(false);
-            //todo 传递 channel
-            coChannel = new CoSocketChannel();
-            created = true;
+            if (config == null) {
+                config = new CoSocketConfig();
+            }
+            coChannel = new CoSocketChannel(channel, config, this,eventLoop);
+            //暂时就定quasar作为协程的实现,不做接口的形式了
+            strandSuspendContinueSupport = new StrandSuspendContinueSupport();
+            this.coSocketEventLoop = eventLoop;
         } catch (IOException e) {
             if (LOGGER.isTraceEnabled()) {
                 LOGGER.trace("open channel happen ioException{}", e);
@@ -62,7 +78,6 @@ public final class CoSocket {
     }
 
 
-    private boolean created = false;
     private boolean closed = false;
     private Object closeLock = new Object();
 
@@ -97,12 +112,13 @@ public final class CoSocket {
 
 
     private CoSocket(SocketAddress address, SocketAddress localAddr) throws IOException {
-        initChannel();
         if (address == null)
             throw new NullPointerException();
+        initDefault();
         try {
-            if (localAddr != null)
+            if (localAddr != null) {
                 bind(localAddr);
+            }
             connect(address);
         } catch (IOException | IllegalArgumentException | SecurityException e) {
             try {
@@ -115,17 +131,13 @@ public final class CoSocket {
     }
 
     //这里我们允许连接超时,不能存在无限等待连接的情况
-    //同时我们默认给10秒(很长了) 的连接超时时间,不允许无限的连接时间
+    //同时我们默认给3秒(很长了) 的连接超时时间,不允许无限的连接时间
     public void connect(SocketAddress endpoint) throws IOException {
-        connect(endpoint, 10 * 1000);
+        connect(endpoint, 3 * 1000);
     }
 
-
+//mark
     public void connect(SocketAddress endpoint, int timeout) throws IOException {
-        connect(endpoint, timeout, null);
-    }
-
-    public void connect(SocketAddress endpoint, int timeout, CoSocketEventLoop eventLoop) throws IOException {
         if (endpoint == null)
             throw new IllegalArgumentException("connect: The address can't be null");
 
@@ -145,8 +157,11 @@ public final class CoSocket {
         InetAddress addr = epoint.getAddress();
         int port = epoint.getPort();
         checkAddress(addr, "connect");
-        coChannel.
-
+        AtomicInteger status = this.status;
+        int forConntect = BitIntStatusUtils.addStatus(status.get(), CoSocketStatus.PARK_FOR_CONNECT);
+        status.set(forConntect);
+        coChannel.bind(epoint);
+        strandSuspendContinueSupport.suspend();
     }
 
 
@@ -185,13 +200,7 @@ public final class CoSocket {
 
 
     public InetAddress getInetAddress() {
-        if (!isConnected())
-            return null;
-        try {
-            return getImpl().getInetAddress();
-        } catch (SocketException e) {
-        }
-        return null;
+        return getRealSocket().getInetAddress();
     }
 
 
@@ -253,7 +262,7 @@ public final class CoSocket {
 
 
     public void setTcpNoDelay(boolean on) throws SocketException {
-        getRealSocket().setTcpNoDelay(true);
+        getRealSocket().setTcpNoDelay(on);
     }
 
 
@@ -271,35 +280,35 @@ public final class CoSocket {
     }
 
 
-    public  void setSoTimeout(int timeout) throws SocketException {
+    public void setSoTimeout(int timeout) throws SocketException {
         //todo
     }
 
 
-    public  int getSoTimeout() throws SocketException {
+    public int getSoTimeout() throws SocketException {
         //todo
         return 0;
     }
 
 
-    public synchronized void setSendBufferSize(int size)
+    public  void setSendBufferSize(int size)
             throws SocketException {
         getRealSocket().setSendBufferSize(size);
     }
 
 
-    public synchronized int getSendBufferSize() throws SocketException {
+    public  int getSendBufferSize() throws SocketException {
         return getRealSocket().getSendBufferSize();
     }
 
 
-    public synchronized void setReceiveBufferSize(int size)
+    public  void setReceiveBufferSize(int size)
             throws SocketException {
         getRealSocket().setReceiveBufferSize(size);
     }
 
 
-    public synchronized int getReceiveBufferSize()
+    public  int getReceiveBufferSize()
             throws SocketException {
         return getRealSocket().getReceiveBufferSize();
     }

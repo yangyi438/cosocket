@@ -5,12 +5,13 @@ import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import yy.code.io.cosocket.config.CoSocketConfig;
-import yy.code.io.cosocket.eventloop.CoSocketEventLoop;
+import io.netty.channel.nio.CoSocketEventLoop;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledFuture;
@@ -24,14 +25,20 @@ import java.util.concurrent.ScheduledFuture;
  */
 public final class CoSocketChannel {
 
-
     private static InternalLogger logger = InternalLoggerFactory.getInstance(CoSocketChannel.class);
 
-    CoSocketConfig config;
+    private final CoSocketConfig config;
 
-    CoSocketEventLoop eventLoop;
+    private final CoSocketEventLoop eventLoop;
 
     boolean isEof = false;
+
+    public CoSocketChannel(SocketChannel channel, CoSocketConfig config, CoSocket coSocket, CoSocketEventLoop eventLoop) {
+        this.innerCoSocket = coSocket;
+        this.channel = channel;
+        this.config = config;
+        this.eventLoop = eventLoop;
+    }
 
     public CoSocketEventLoop eventLoop() {
         return eventLoop;
@@ -51,7 +58,11 @@ public final class CoSocketChannel {
         return channel;
     }
 
-    //真实的channel nio的channel
+    public CoSocket getInnerCoSocket() {
+        return innerCoSocket;
+    }
+
+    //real channel
     private final SocketChannel channel;
 
     public static boolean isActive(SocketChannel channel) {
@@ -146,7 +157,7 @@ public final class CoSocketChannel {
         }
     }
 
-    //关闭当前的socket连接
+    //关闭当前的socket连接,不能抛出异常
     public void close() {
         Executor executor = null;
         try {
@@ -209,6 +220,21 @@ public final class CoSocketChannel {
         return socket.isInputShutdown() && socket.isOutputShutdown() || !isActive(channel);
     }
 
+    public static void coSocketChannelRegister(CoSocketChannel coChannel, Selector selector, int interestOps) {
+        SocketChannel socketChannel = coChannel.getChannel();
+        try {
+            SelectionKey key = socketChannel.register(selector, interestOps);
+            coChannel.selectionKey = key;
+        } catch (IOException e) {
+            if (logger.isTraceEnabled()) {
+                logger.trace("register happen error{}",e);
+            }
+            //我们提前关闭资源了 ,这个异常只有在注册的时候,才会发生
+            safeClose(socketChannel);
+            coChannel.innerCoSocket.errorConnect(e);
+        }
+    }
+
     public boolean isInputShutdown() {
         return channel.socket().isInputShutdown() || !isActive(channel);
     }
@@ -217,8 +243,16 @@ public final class CoSocketChannel {
         return channel.socket().isOutputShutdown() || !isActive(channel);
     }
 
-    //仅仅由CoSocket来调用
-    public void bind(InetSocketAddress inetSocketAddress) {
-
+    //仅仅由CoSocket来调用,用来去连接对面
+    public void bind(InetSocketAddress remote) {
+        try {
+            this.channel.connect(remote);
+            eventLoop.register(this, SelectionKey.OP_CONNECT);
+        } catch (IOException e) {
+            if (logger.isTraceEnabled()) {
+                logger.error("error to connect remote {}", e);
+            }
+            this.close();
+        }
     }
 }
