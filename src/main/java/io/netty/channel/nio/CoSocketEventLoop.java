@@ -11,6 +11,7 @@ import io.netty.util.internal.SystemPropertyUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import yy.code.io.cosocket.CoSocketChannel;
+import yy.code.io.cosocket.RegisterHandler;
 import yy.code.io.cosocket.eventloop.CoSocketEventLoopGroup;
 
 import java.io.IOException;
@@ -889,20 +890,29 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
     }
 
 
-    //fixme 这里添加了注册我们的CoSocketChannel,在netty的基础上修改的
-    public void register(final CoSocketChannel coChannel, final int interestOps) {
+    //fixme 这里添加了注册我们的CoSocketChannel,在netty的基础上修改的,RegisterHandler的方法不能自己抛出异常
+    public void register(final CoSocketChannel coChannel, final int interestOps, final RegisterHandler handler)  {
         if (inEventLoop()) {
-            coChannel.coSocketChannelRegister(coChannel,selector, interestOps);
+            register0(coChannel, interestOps, handler);
         } else {
             this.execute(new Runnable() {
                 @Override
                 public void run() {
-                    coChannel.coSocketChannelRegister(coChannel,selector, interestOps);
+                    register0(coChannel, interestOps, handler);
                 }
             });
         }
     }
 
+    void register0(CoSocketChannel coChannel, int interestOps, RegisterHandler handler) {
+        try {
+            SocketChannel channel = coChannel.getSocketChannel();
+            SelectionKey selectionKey = channel.register(selector, interestOps);
+            handler.success(selectionKey, coChannel, this);
+        } catch (IOException exception) {
+            handler.error(exception,coChannel,this);
+        }
+    }
 
 
 }

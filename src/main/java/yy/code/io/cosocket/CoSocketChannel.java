@@ -11,7 +11,6 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledFuture;
@@ -27,11 +26,19 @@ public final class CoSocketChannel {
 
     private static InternalLogger logger = InternalLoggerFactory.getInstance(CoSocketChannel.class);
 
+    public CoSocketConfig getConfig() {
+        return config;
+    }
+
     private final CoSocketConfig config;
 
     private final CoSocketEventLoop eventLoop;
 
     boolean isEof = false;
+
+    //标志有没有调用了close的方法
+    private boolean isClose = false;
+
 
     public CoSocketChannel(SocketChannel channel, CoSocketConfig config, CoSocket coSocket, CoSocketEventLoop eventLoop) {
         this.innerCoSocket = coSocket;
@@ -54,7 +61,7 @@ public final class CoSocketChannel {
     ScheduledFuture<?> writeTimeoutFuture;
     public SelectionKey selectionKey;
 
-    public SocketChannel getChannel() {
+    public SocketChannel getSocketChannel() {
         return channel;
     }
 
@@ -159,11 +166,32 @@ public final class CoSocketChannel {
 
     //关闭当前的socket连接,不能抛出异常
     public void close() {
+        if (eventLoop().inEventLoop()) {
+            closeAndRelease();
+        } else {
+            eventLoop().execute(new Runnable() {
+                @Override
+                public void run() {
+                    closeAndRelease();
+                }
+            });
+        }
+    }
+
+    //关闭而且释放资源
+    private void closeAndRelease() {
+        //todo 添加其他释放资源的操作
+        if (isClose) {
+            //防止重复进行close的方法了
+            return;
+        }
         Executor executor = null;
         try {
             //对于SoLinger有特殊的处理的方法
             if (channel.isOpen() && channel.socket().getSoLinger() > 0) {
-                eventLoop.cancel(selectionKey);
+                if (selectionKey != null) {
+                    eventLoop.cancel(selectionKey);
+                }
             }
             executor = GlobalEventExecutor.INSTANCE;
         } catch (Throwable ignore) {
@@ -172,7 +200,7 @@ public final class CoSocketChannel {
         if (executor == null) {
             safeClose(channel);
         } else {
-            //另外一个线程来执行这个方法,netty是这样做的,不是很明白,可能是避免坑的原因
+            //另外一个线程来执行这个方法,netty是这样做的,不是很明白,可能是close方法可能会线程阻塞
             //先按照netty的来
             executor.execute(new Runnable() {
                 @Override
@@ -181,7 +209,11 @@ public final class CoSocketChannel {
                 }
             });
         }
+        this.isClose = true;
+        //todo 添加可能的需要唤醒功能,在rebuildSelector的时候
+        //fixme 确保万一
     }
+
 
     private static void safeClose(SocketChannel channel) {
         try {
@@ -220,20 +252,6 @@ public final class CoSocketChannel {
         return socket.isInputShutdown() && socket.isOutputShutdown() || !isActive(channel);
     }
 
-    public static void coSocketChannelRegister(CoSocketChannel coChannel, Selector selector, int interestOps) {
-        SocketChannel socketChannel = coChannel.getChannel();
-        try {
-            SelectionKey key = socketChannel.register(selector, interestOps);
-            coChannel.selectionKey = key;
-        } catch (IOException e) {
-            if (logger.isTraceEnabled()) {
-                logger.trace("register happen error{}",e);
-            }
-            //我们提前关闭资源了 ,这个异常只有在注册的时候,才会发生
-            safeClose(socketChannel);
-            coChannel.innerCoSocket.errorConnect(e);
-        }
-    }
 
     public boolean isInputShutdown() {
         return channel.socket().isInputShutdown() || !isActive(channel);
@@ -243,16 +261,10 @@ public final class CoSocketChannel {
         return channel.socket().isOutputShutdown() || !isActive(channel);
     }
 
-    //仅仅由CoSocket来调用,用来去连接对面
-    public void bind(InetSocketAddress remote) {
-        try {
-            this.channel.connect(remote);
-            eventLoop.register(this, SelectionKey.OP_CONNECT);
-        } catch (IOException e) {
-            if (logger.isTraceEnabled()) {
-                logger.error("error to connect remote {}", e);
-            }
-            this.close();
-        }
+    //仅仅由CoSocket来调用,用来去连接对面,注意的是,我们这里的连接超时不是精确的
+    //会生成一个队列到事件循环队列里面.等候执行,超时的取消task也是在netty的调度下,延迟执行的
+    public void connect(InetSocketAddress remote) {
+        eventLoop().register(this, SelectionKey.OP_CONNECT, RegisterHandler.CONNECTION_HANDLER);
     }
+
 }

@@ -1,6 +1,7 @@
 package yy.code.io.cosocket;
 
 
+import io.netty.buffer.ByteBuf;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import yy.code.io.cosocket.config.CoSocketConfig;
@@ -24,7 +25,20 @@ public final class CoSocket {
     void successConnect() {
     }
 
+    //连接的时候发生了异常,连接超时或者其他io异常,那我们就干掉当前的连接
+    //注意的是,这个被io调度线程来调度使用的触发连接异常的
     void errorConnect(IOException e) {
+        this.exception = e;
+        while (true) {
+            int status = this.status.get();
+            int error = BitIntStatusUtils.addStatus(status, CoSocketStatus.EXCEPTION);
+            //理论上来说,不应该发生失败的情况的,必须的一次成功
+            if (this.status.compareAndSet(status,error)) {
+                break;
+            }
+        }
+        ssSupport.beContinue();
+        //之后coSocket线程应该就会被唤醒
     }
 
 
@@ -40,8 +54,15 @@ public final class CoSocket {
     private IOException exception;
     private CoSocketEventLoop coSocketEventLoop;
     CoSocketChannel coChannel;
-    private StrandSuspendContinueSupport strandSuspendContinueSupport;
+    private StrandSuspendContinueSupport ssSupport;
     private AtomicInteger status = new AtomicInteger(0);
+    //出现异常或者正常关闭的时候的标志位,代表有没有释放过资源
+     boolean isRelease = false;
+    //读缓存,一次从channel里面读好多数据的,然后写到readBuffer里面
+    private ByteBuf readBuffer;
+    //写缓存,如果使用者线程,写不是directBuffer的数据到缓存里面去,那么我们就手动先写到我们内置直接内存的writeBuffer里面去
+    //然后在往真实的channel里面去写数据
+    private ByteBuf writeBuffer;
 
     public CoSocket() throws IOException {
         initDefault();
@@ -63,14 +84,14 @@ public final class CoSocket {
             }
             coChannel = new CoSocketChannel(channel, config, this,eventLoop);
             //暂时就定quasar作为协程的实现,不做接口的形式了
-            strandSuspendContinueSupport = new StrandSuspendContinueSupport();
+            ssSupport = new StrandSuspendContinueSupport();
             this.coSocketEventLoop = eventLoop;
         } catch (IOException e) {
             if (LOGGER.isTraceEnabled()) {
                 LOGGER.trace("open channel happen ioException{}", e);
             }
             if (channel != null) {
-                //关闭的时候又出现异常就忽略了,直接抛出来
+                //关闭的时候又出现异常就忽略了,没办法在处理了
                 channel.close();
             }
             throw e;
@@ -131,7 +152,7 @@ public final class CoSocket {
     }
 
     //这里我们允许连接超时,不能存在无限等待连接的情况
-    //同时我们默认给3秒(很长了) 的连接超时时间,不允许无限的连接时间
+    //同时我们默认给3秒(很长了) 的连接超时时间,不允许无限的连接时间,就是不允许
     public void connect(SocketAddress endpoint) throws IOException {
         connect(endpoint, 3 * 1000);
     }
@@ -157,11 +178,34 @@ public final class CoSocket {
         InetAddress addr = epoint.getAddress();
         int port = epoint.getPort();
         checkAddress(addr, "connect");
+        SecurityManager security = System.getSecurityManager();
+        if (security != null) {
+            if (epoint.isUnresolved())
+                security.checkConnect(epoint.getHostName(), port);
+            else
+                security.checkConnect(addr.getHostAddress(), port);
+        }
         AtomicInteger status = this.status;
-        int forConntect = BitIntStatusUtils.addStatus(status.get(), CoSocketStatus.PARK_FOR_CONNECT);
-        status.set(forConntect);
-        coChannel.bind(epoint);
-        strandSuspendContinueSupport.suspend();
+        int forConnect = BitIntStatusUtils.addStatus(status.get(), CoSocketStatus.PARK_FOR_CONNECT);
+        status.set(forConnect);
+        coChannel.getConfig().setConnectionMilliSeconds(timeout);
+        coChannel.connect(epoint);
+        ssSupport.suspend();
+        //被唤醒了
+        int now = status.get();
+        if (BitIntStatusUtils.isInStatus(now, CoSocketStatus.CONNECT_SUCCESS)) {
+            int running = BitIntStatusUtils.convertStatus(now, CoSocketStatus.PARK_FOR_CONNECT, CoSocketStatus.RUNNING);
+            status.set(running);
+            //连接成功了,直接返回
+            return;
+        }
+        if (BitIntStatusUtils.isInStatus(now, CoSocketStatus.EXCEPTION)) {
+            assert exception != null;
+            throw exception;
+        } else {
+            //连接的结果只有成功,或者失败,不应该有其他的情况的,发生了应该就是内部错误
+            throw new IllegalStateException("could not happen may someError");
+        }
     }
 
 
@@ -182,7 +226,7 @@ public final class CoSocket {
         }
         InetAddress addr = epoint.getAddress();
         int port = epoint.getPort();
-        checkAddress(addr, "bind");
+        checkAddress(addr, "connect");
         SecurityManager security = System.getSecurityManager();
         if (security != null) {
             security.checkListen(port);
@@ -209,7 +253,7 @@ public final class CoSocket {
     }
 
     private Socket getRealSocket() {
-        return coChannel.getChannel().socket();
+        return coChannel.getSocketChannel().socket();
     }
 
 
@@ -344,20 +388,61 @@ public final class CoSocket {
     }
 
 
-    //todo 关闭连接的时候需要判断当前连接是否失效,有效等,
+
     //linger有没有设置,有没有注册到channel上面
     public void close() throws IOException {
-        //todo
+        synchronized (closeLock) {
+            if (isClosed()) {
+                return;
+            }
+            if (!isRelease) {
+                AtomicInteger now = this.status;
+                int stat = now.get();
+                if (BitIntStatusUtils.isInStatus(stat, CoSocketStatus.EXCEPTION)) {
+                    //是异常的话,可以确定是io线程设定这个状态的,并且会自动释放资源,所以我们就不用担心了
+                    //只是修改一下标志位
+                    isRelease = true;
+                    closed = true;
+                    return;
+                } else {
+                    //这种就是直接使用CoSocket的api的时候直接发生的异常,然后需要调用关闭的api,来确保释放资源
+                    // 或者是正常的调用close的操作来关闭资源
+                    //这个时候的close的操作是必须的操作,我们
+                    // 我们在这里就不抛出异常了,因为我们要再次挂起一下协程,这样有性能问题,
+                    //如果是已经抛出异常的情况下,clsoe的操作没有多大的意义,
+                    //可能遗漏的是一个tcp连接前面都正常,但是closed的时候有异常了,需要在应用层面体现出来
+                    //这个时候,我们也不管了,这种异常也往往没有多大意义,仅仅打日志如果在关闭channel正常的channel的情况下发生异常,记录下,不在使用CoSocket线程的层面抛出来
+                    ByteBuf readBuffer = this.readBuffer;
+                    ByteBuf writeBuffer = this.writeBuffer;
+                    //释放读写缓存
+                    if (readBuffer != null && !readBuffer.isReadable()) {
+                        this.readBuffer = null;
+                        readBuffer.release();
+                    }
+                    if (writeBuffer != null && !writeBuffer.isReadable()) {
+                        this.writeBuffer = null;
+                        writeBuffer.release();
+                    }
+                    coChannel.close();
+                }
+            }
+            closed = true;
+        }
     }
 
 
+    //因为连接超时而关闭
+    private void closeByErrorConnect() {
+
+    }
+
     public void shutdownInput() throws IOException {
-        CoSocketChannel.shutdownInput(coChannel.getChannel());
+        CoSocketChannel.shutdownInput(coChannel.getSocketChannel());
     }
 
 
     public void shutdownOutput() throws IOException {
-        CoSocketChannel.shutdownOutput(coChannel.getChannel());
+        CoSocketChannel.shutdownOutput(coChannel.getSocketChannel());
     }
 
 

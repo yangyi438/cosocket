@@ -10,6 +10,8 @@ public final class CoSocketConfig {
     //default 64k
     private long maxInputBufferSize = 64*1024;
     private int maxReadSizePerOnce;
+    //连接超时默认就给3秒的时间了,我们的连接是必须要给连接超时的
+    private int connectionMilliSeconds = 3 * 1024;
 
     public void setMaxWriteBufferSIze(long maxWriteBufferSIze) {
         this.maxWriteBufferSIze = maxWriteBufferSIze;
@@ -34,5 +36,13 @@ public final class CoSocketConfig {
 
     public void setMaxReadSizePerOnce(int maxReadSizePerOnce) {
         this.maxReadSizePerOnce = maxReadSizePerOnce;
+    }
+
+    public void setConnectionMilliSeconds(int connectionMilliSeconds) {
+        this.connectionMilliSeconds = connectionMilliSeconds;
+    }
+
+    public int getConnectionMilliSeconds() {
+        return connectionMilliSeconds;
     }
 }

@@ -25,4 +25,7 @@ public final class CoSocketStatus {
     //正常关闭了连接
     public static final int CLOSE = 1 << 8;
 
+    //连接成功了
+    public static final int CONNECT_SUCCESS = 1 << 9;
+
 }
