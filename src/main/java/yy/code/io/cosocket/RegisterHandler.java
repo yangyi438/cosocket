@@ -1,6 +1,5 @@
 package yy.code.io.cosocket;
 
-import com.sun.xml.internal.bind.v2.model.core.ID;
 import io.netty.channel.nio.CoSocketEventLoop;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -8,12 +7,12 @@ import io.netty.util.internal.logging.InternalLoggerFactory;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.nio.channels.SelectionKey;
-import java.nio.channels.SocketChannel;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Created by ${good-yy} on 2018/10/18.
  */
+//注册coSocketChannel提供的回调函数
 public interface RegisterHandler {
 
     InternalLogger LOGGER = InternalLoggerFactory.getInstance(RegisterHandler.class);
@@ -36,7 +35,7 @@ public interface RegisterHandler {
                     //回调  errorConnect函数
                     CoSocket innerCoSocket = coChannel.innerCoSocket;
                     //代表已经释放过资源了
-                    innerCoSocket.isRelease = true;
+                    innerCoSocket.isCoChannelRelease = true;
                     innerCoSocket.errorConnect(new SocketTimeoutException());
                 }
             }, connectionMilliseconds, TimeUnit.MILLISECONDS);
@@ -50,7 +49,7 @@ public interface RegisterHandler {
             channel.close();
             CoSocket innerCoSocket = channel.innerCoSocket;
             //因为我们处于连接状态的channel没有啥资源,直接赋值为true,代表已经释放了资源
-            innerCoSocket.isRelease = true;
+            innerCoSocket.isCoChannelRelease = true;
             innerCoSocket.errorConnect(exception);
         }
     };

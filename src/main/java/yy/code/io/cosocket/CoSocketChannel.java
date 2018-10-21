@@ -14,6 +14,7 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Created by ${good-yy} on 2018/10/13.
@@ -91,6 +92,8 @@ public final class CoSocketChannel {
                 //fixme 关闭selectKey一定要使用这个方法
                 eventLoop.cancel(selectionKey);
                 channel.close();
+                //CoSocketChannel的相关的部分的资源已经释放完毕了
+                innerCoSocket.isCoChannelRelease = true;
             } catch (IOException error) {
                 if (logger.isTraceEnabled()) {
                     logger.trace("connection channel error then close channel error{}", error);
@@ -102,15 +105,21 @@ public final class CoSocketChannel {
                 //取消连接超时检测,或者其他的检测
                 //todo 添加以后其他的task 取消
                 connectTimeoutFuture.cancel(false);
+                connectTimeoutFuture = null;
             }
         }
     }
 
     /**
      * 读事件触发了,唤醒我们的io线程,或者等待一会在通知我们的io线程,
+     * 取决于我们的socket的handlerReaActive的实现
      */
 
     public void readActive() {
+        if (readTimeoutFuture != null) {
+            //取消读超时的task
+            readTimeoutFuture.cancel(false);
+        }
         boolean closeRead = innerCoSocket.handlerReadActive();
         if (closeRead) {
             //关闭读监听
@@ -164,8 +173,8 @@ public final class CoSocketChannel {
         }
     }
 
-    //关闭当前的socket连接,不能抛出异常
-    public void close() {
+    //关闭当前的socket连接,不能抛出异常 加上同步,已避免潜在的并发close竞争
+    public synchronized void close() {
         if (eventLoop().inEventLoop()) {
             closeAndRelease();
         } else {
@@ -202,12 +211,7 @@ public final class CoSocketChannel {
         } else {
             //另外一个线程来执行这个方法,netty是这样做的,不是很明白,可能是close方法可能会线程阻塞
             //先按照netty的来
-            executor.execute(new Runnable() {
-                @Override
-                public void run() {
-                    safeClose(channel);
-                }
-            });
+            executor.execute(() -> safeClose(channel));
         }
         this.isClose = true;
         //todo 添加可能的需要唤醒功能,在rebuildSelector的时候
@@ -220,12 +224,12 @@ public final class CoSocketChannel {
             channel.close();
         } catch (IOException e) {
             if (logger.isInfoEnabled()) {
-                logger.info("close the channel happen error{}", e);
+                logger.info("close the channel happen error.", e);
             }
         }
     }
 
-    //fixme netty里面关闭OutPut是需要 cancel selectKey的 我们要考虑这个怎么实现,会不会触发select 不堵塞
+    //fixme netty里面shutdownOutput是需要 cancel selectKey的 我们要考虑这个怎么实现,会不会触发select 不堵塞
     public static void shutdownOutput(SocketChannel channel) throws IOException {
         if (PlatformDependent.javaVersion() >= 7) {
             channel.shutdownOutput();
@@ -265,6 +269,33 @@ public final class CoSocketChannel {
     //会生成一个队列到事件循环队列里面.等候执行,超时的取消task也是在netty的调度下,延迟执行的
     public void connect(InetSocketAddress remote) {
         eventLoop().register(this, SelectionKey.OP_CONNECT, RegisterHandler.CONNECTION_HANDLER);
+    }
+
+    //由CoSocket来调用,block一定的时间,直到阻塞时间到了,或者等待可读时间发生了
+    //todo 我们要处理发送放网络堵塞的原因,一直发慢包,那我们使用者线程就会频繁的因为读数据而挂起,这样会影响效率
+    //比如说 读几百b 就挂起一下,我们唤醒的时候,可以释放延后一下,防止这种循环式的等待读,然后挂起
+    //但是这样也会造成延迟的问题,我们要均衡这些情况,平衡我们读数据的速率,和发送方发送的速率.
+    //但是也要兼顾这样造成的延迟问题
+    public void waitForRead() {
+        if (eventLoop.inEventLoop()) {
+            waitForRead0();
+        } else {
+            eventLoop().execute(this::waitForRead0);
+        }
+    }
+
+    //监听读事件的发生
+    private void waitForRead0() {
+        if (innerCoSocket.readTimeoutHandler == null) {
+            //我们可能会设置自己的readTimeHandler,这里给一个默认的readTimeOutHandler
+           innerCoSocket.readTimeoutHandler  = () -> {
+               //关闭读监听
+               closeReadListen();
+               innerCoSocket.handlerReadTimeOut();
+           };
+        }
+        this.startReadListen();
+        this.readTimeoutFuture = eventLoop().schedule(innerCoSocket.readTimeoutHandler,getConfig().getSoTimeout(),TimeUnit.MILLISECONDS);
     }
 
 }

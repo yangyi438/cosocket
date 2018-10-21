@@ -39,6 +39,12 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
     private static final boolean DISABLE_KEYSET_OPTIMIZATION =
             SystemPropertyUtil.getBoolean("io.netty.noKeySetOptimization", false);
 
+    private static final ThreadLocal<WakeUpTime> WAKE_UP_TIME = new ThreadLocal<>();
+
+    public static long getCurrentWakeUpTime(){
+        return WAKE_UP_TIME.get().getCurrentNanoTime();
+    }
+
     private static final int MIN_PREMATURE_SELECTOR_RETURNS = 3;
     private static final int SELECTOR_AUTO_REBUILD_THRESHOLD;
 
@@ -430,6 +436,9 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
 
                 cancelledKeys = 0;
                 needsToSelectAgain = false;
+                final long ioStartTime = System.nanoTime();
+                //set wakeUpTime
+                WAKE_UP_TIME.get().setCurrentNanoTime(ioStartTime);
                 final int ioRatio = this.ioRatio;
                 if (ioRatio == 100) {
                     try {
@@ -439,7 +448,6 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
                         runAllTasks();
                     }
                 } else {
-                    final long ioStartTime = System.nanoTime();
                     try {
                         processSelectedKeys();
                     } finally {

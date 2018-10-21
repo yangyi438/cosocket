@@ -1,5 +1,7 @@
 package yy.code.io.cosocket.status;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * Created by ${good-yy} on 2018/9/8.
  */
@@ -21,5 +23,15 @@ public final class BitIntStatusUtils {
 
     public static boolean isInStatus(int stat, int hope) {
         return (stat & hope) != 0;
+    }
+
+    public static void casAddStatus(AtomicInteger integer, int after) {
+        while (true) {
+            int now = integer.get();
+            int update = BitIntStatusUtils.addStatus(now, after);
+            if (integer.compareAndSet(now, update)) {
+                break;
+            }
+        }
     }
 }
