@@ -73,8 +73,9 @@ public final class BlockingReadWriteControl {
         secondReadBlockNanoTime = 0;
     }
 
-    //读了多少数据没有堵塞
-    public void reportReadNoneBlocking(int noneBlockingRead) {
+    //读了多少数据没有堵塞,isEmptyReceiveBuffer代表tcp接受缓存中的数据是不是已经读空了,读空了的话
+    //我们的接受ByteBuff的数据没有被填充完毕
+    public void reportReadNoneBlocking(int noneBlockingRead,boolean isEmptyReceiveBuffer) {
 
     }
 

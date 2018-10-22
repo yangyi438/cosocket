@@ -36,23 +36,26 @@ public final class CoSocket implements Closeable {
     //出现异常或者正常关闭的时候的标志位,代表有没有释放过资源
     boolean isCoChannelRelease = false;
     boolean isEof = false;
+    boolean isInputCLose = false;
+    boolean isOutPutCLose = false;
     //读缓存,一次从channel里面读好多数据的,然后写到readBuffer里面
     private ByteBuf readBuffer;
     //写缓存,如果使用者线程,写不是directBuffer的数据到缓存里面去,那么我们就手动先写到我们内置直接内存的writeBuffer里面去
     //然后在往真实的channel里面去写数据
     private ByteBuf writeBuffer;
     BlockingReadWriteControl blockingRW = new BlockingReadWriteControl();
+
     public CoSocket() throws IOException {
         initDefault();
     }
 
     private void initDefault() throws IOException {
         SocketChannel channel = SocketChannel.open();
-        initChannel(channel,new CoSocketConfig(), CoSocketFactory.globalEventLoop.nextCoSocketEventLoop());
+        initChannel(channel, new CoSocketConfig(), CoSocketFactory.globalEventLoop.nextCoSocketEventLoop());
     }
 
     //初始化channel,eventLoop,StrandSuspendContinueSupport
-    private void initChannel(SocketChannel channel,CoSocketConfig config, CoSocketEventLoop eventLoop) throws IOException {
+    private void initChannel(SocketChannel channel, CoSocketConfig config, CoSocketEventLoop eventLoop) throws IOException {
         assert eventLoop != null;
         assert channel != null;
         try {
@@ -424,10 +427,18 @@ public final class CoSocket implements Closeable {
         }
     }
 
-
-
+    //fixme 我们不会挂起线程,等到关闭操作被IO线程操作并真实的发生,并且等待回馈,这样有代价,
+    //大多情况我们认为这样是没有意义的,关闭的时候发生了异常又如何,提升效率,牺牲了一些东西
     public void shutdownInput() throws IOException {
-        CoSocketChannel.shutdownInput(coChannel.getSocketChannel());
+        //已经关闭就忽略
+        if (isClosed()) {
+            return;
+        }
+        if (isInputCLose) {
+            return;
+        }
+        coChannel.shutdownInput();
+        isInputCLose = true;
     }
 
 
@@ -469,6 +480,112 @@ public final class CoSocket implements Closeable {
         getRealSocket().setPerformancePreferences(connectionTime, latency, bandwidth);
     }
 
+
+    //block代表会阻塞(挂起当前线程或者协程)的等待数据一直可用,直到读超时发生,抛出读超时异常,或者遇到eof
+    //block为false的话,没有数据可读的话,就会直接返回0 代表没有任何数据可读
+    //eof的话,我们就直接返回-1
+    public int read(byte[] b, int off, int length, boolean isBlock) throws IOException {
+        if (b == null) {
+            throw new NullPointerException();
+        } else if (off < 0 || length < 0 || length > b.length - off) {
+            throw new IndexOutOfBoundsException();
+        }
+        if (isEof) {
+            return -1;
+        }
+        prepareReadBuf();
+        int readableBytes = prepareReadableBytes();
+        if (readableBytes < 0) {
+            //-1代表eof了
+            return -1;
+        }
+        //tcp缓冲区里面没有数据了
+        if (readableBytes == 0) {
+            if (!isBlock) {
+                //不是堵塞模式的话,我们就直接返回0
+                return 0;
+            } else {
+                blockForRead();
+                //被selector线程唤醒了,
+                //在读一下,没有数据gg了要抛出异常给调用者
+                  readableBytes= prepareReadableBytes();
+                if (readableBytes == 0) {
+                    //这里就是读超时了,抛出读超时异常
+                    throw new SocketTimeoutException("read from channel time out");
+                }
+                if (readableBytes < 0) {
+                    //-1代表eof了
+                    return -1;
+                }
+            }
+        }
+        //将数据转移到数据里面
+        int read = Math.min(readableBytes, length);
+        readBuffer.readBytes(b, off, read);
+        resetReadBufIfNeed();
+        return read;
+    }
+
+    private void blockForRead() {
+        //当前读要被挂起了,所以我们要记录,因为没数据读而挂起的频率,防止频繁的切换导致浪费cpu
+        blockingRW.reportReadBlock();
+        //阻塞当前线程,然后一直等可读事件发生,超过超时时间就抛出超时异常
+        coChannel.waitForRead();
+        //挂起当前线程
+        ssSupport.suspend();
+    }
+
+    /**
+     *
+     * @return 读取的的byte的数据
+     * @throws IOException
+     */
+    public int readBytes()throws IOException {
+        if (isEof) {
+            return -1;
+        }
+        prepareReadBuf();
+        int readableBytes = prepareReadableBytes();
+        if (readableBytes > 0) {
+            int res = readBuffer.readableBytes();
+            resetReadBufIfNeed();
+            return res;
+        }
+        if (readableBytes == 0) {
+            blockForRead();
+            readableBytes = prepareReadableBytes();
+            if (readableBytes > 0) {
+                int res = readBuffer.readableBytes();
+                resetReadBufIfNeed();
+                return res;
+            }
+            if (readableBytes == 0) {
+                //还没有读到数据,就抛抛出超时异常了
+                throw new SocketTimeoutException("read Time out exception");
+            }
+            return -1;
+        }
+        return -1;
+    }
+
+    /**
+     *
+     * @return 还有多少可读的数据,在不堵塞的情况下,就是返回当前read缓冲区的数据,fixme 有可能返回0
+     */
+    public int available() throws IOException {
+        prepareReadBuf();
+        //
+        return readBuffer.readableBytes();
+    }
+
+    //重置读缓存,如果需要的话
+    private void resetReadBufIfNeed() {
+        if (!readBuffer.isReadable()) {
+            //清除掉,方便下一次的使用.和读取数据
+            readBuffer.clear();
+        }
+    }
+
     //todo
     void prepareReadBuf() throws IOException {
         if (readBuffer == null) {
@@ -485,24 +602,14 @@ public final class CoSocket implements Closeable {
         }
     }
 
-    //block代表会阻塞(挂起当前线程或者协程)的等待数据一直可用,直到读超时发生,抛出读超时异常,或者遇到eof
-    //block为false的话,没有数据可读的话,就会直接返回0 代表没有任何数据可读
-    //eof的话,我们就直接返回-1
-    public int read(byte[] b, int off, int length, boolean isBlock) throws IOException {
-        if (b == null) {
-            throw new NullPointerException();
-        } else if (off < 0 || length < 0 || length > b.length - off) {
-            throw new IndexOutOfBoundsException();
-        }
-        if (isEof) {
-            return -1;
-        }
-        prepareReadBuf();
+    private int prepareReadableBytes() throws IOException {
         if (!readBuffer.isReadable()) {
             SocketChannel channel = coChannel.getSocketChannel();
             int i;
+            int writableBytes = readBuffer.writableBytes();
             try {
-                 i = readBuffer.writeBytes(channel, readBuffer.writableBytes());
+                i = readBuffer.writeBytes(channel, writableBytes);
+                blockingRW.reportReadNoneBlocking(i, i < writableBytes);
             } catch (IOException e) {
                 if (LOGGER.isTraceEnabled()) {
                     LOGGER.trace("read from channel happen error.", e);
@@ -512,43 +619,13 @@ public final class CoSocket implements Closeable {
             if (i < 0) {
                 return handlerEof();
             }
-            //tcp缓冲区里面没有数据了
             if (i == 0) {
-                if (!isBlock) {
-                    //不是堵塞模式的话,我们就直接返回0
-                    return 0;
-                } else {
-                    //阻塞当前线程,然后一直等可读事件发生,超过超时时间就抛出超时异常
-                    coChannel.waitForRead();
-                    //当前读要被挂起了,所以我们要记录,因为没数据读而挂起的频率,防止频繁的切换导致浪费cpu
-                    blockingRW.reportReadBlock();
-                    //挂起当前线程
-                    ssSupport.suspend();
-                    //被select线程唤醒了,
-                    //在读一下,没有数据gg了要抛出异常给调用者
-                    try {
-                        i = readBuffer.writeBytes(channel, readBuffer.writableBytes());
-                    } catch (IOException e) {
-                       return handlerReadException(e);
-                    }
-                    if(i<0){
-                        return handlerEof();
-                    }
-                    if (i == 0) {
-                        //这里就是读超时了,抛出读超时异常
-                        throw new SocketTimeoutException("read from channel time out");
-                    }
-                }
+                return 0;
             }
+            return readBuffer.readableBytes();
+        } else {
+            return readBuffer.readableBytes();
         }
-        //将数据转移到数据里面
-        int read = Math.min(readBuffer.readableBytes(), length);
-        readBuffer.readBytes(b, off, read);
-        if (!readBuffer.isReadable()) {
-            //清除掉,方便下一次的使用
-            readBuffer.clear();
-        }
-        return read;
     }
 
     private int handlerEof() {
@@ -572,6 +649,7 @@ public final class CoSocket implements Closeable {
         //唤醒我们等待读的线程,时间到了
         ssSupport.beContinue();
     }
+
     //返回true代表要关闭了读监听了,todo
     boolean handlerReadActive() {
         if (!BitIntStatusUtils.isInStatus(status.get(), CoSocketStatus.PARK_FOR_READ)) {
@@ -604,5 +682,17 @@ public final class CoSocket implements Closeable {
     boolean handlerWriteActive() {
         //todo
         return false;
+    }
+
+    //希望跳过的数据,返回真实的跳过的数据
+    public long skip(long numHopeSkip) throws IOException {
+        prepareReadBuf();
+        int readableBytes = readBuffer.readableBytes();
+        if (readableBytes == 0) {
+            return 0;
+        }
+        long realSkip = Math.min(readableBytes, numHopeSkip);
+        readBuffer.skipBytes((int) realSkip);
+        return realSkip;
     }
 }

@@ -156,11 +156,21 @@ public final class CoSocketChannel {
     }
 
     void closeReadListen() {
+        if (eventLoop().inEventLoop()) {
+            closeReadListen();
+        } else {
+            eventLoop().execute(this::closeReadListen0);
+        }
+    }
+
+    void closeReadListen0() {
         SelectionKey selectionKey = this.selectionKey;
-        int interestOps = selectionKey.interestOps();
-        //关闭自动读的 位
-        if ((interestOps & SelectionKey.OP_READ) != 0) {
-            selectionKey.interestOps(interestOps & ~SelectionKey.OP_READ);
+        if (selectionKey != null) {
+            int interestOps = selectionKey.interestOps();
+            //关闭自动读的 位
+            if ((interestOps & SelectionKey.OP_READ) != 0) {
+                selectionKey.interestOps(interestOps & ~SelectionKey.OP_READ);
+            }
         }
     }
 
@@ -238,17 +248,31 @@ public final class CoSocketChannel {
         }
     }
 
-    //关闭输入,由于netty的处理,读到eof或者读的时候发生异常,我们就要
-    //关闭整个连接,或者关闭整个input
-    //在我们的实现中,出现发生异常就要关闭整个连接
-    //eof就话就报告eof,
-    //fixme
-    public static void shutdownInput(SocketChannel channel) throws IOException {
-        if (PlatformDependent.javaVersion() >= 7) {
-            channel.shutdownInput();
+
+     void shutdownInput()  {
+        if (eventLoop().inEventLoop()) {
+            shutdownInput0();
         } else {
-            channel.socket().shutdownInput();
+            eventLoop().execute(this::shutdownInput0);
         }
+    }
+
+    private void shutdownInput0() {
+        try {
+            closeReadListen0();
+            SocketChannel channel = this.channel;
+            if (PlatformDependent.javaVersion() >= 7) {
+                channel.shutdownInput();
+            } else {
+                channel.socket().shutdownInput();
+            }
+        } catch (IOException e) {
+            //忽略关闭的时候发生的异常
+            if (logger.isTraceEnabled()) {
+                logger.trace("close inputStream happen exception .",e);
+            }
+        }
+
     }
 
     public static boolean isShutdown(SocketChannel channel) {
