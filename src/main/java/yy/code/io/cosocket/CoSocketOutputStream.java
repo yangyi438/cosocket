@@ -12,7 +12,7 @@ public class CoSocketOutputStream extends OutputStream {
 
     }
 
-
+//todo 完成这整个类
     public void write(byte b[]) throws IOException {
         write(b, 0, b.length);
     }

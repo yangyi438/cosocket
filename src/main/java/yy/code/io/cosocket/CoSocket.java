@@ -26,7 +26,10 @@ public final class CoSocket implements Closeable {
     private static final InternalLogger LOGGER = InternalLoggerFactory.getInstance(CoSocket.class);
 
     Runnable delayWakeUpHandler = null;
+    //等待读超时的时候由eventloop执行的task
     Runnable readTimeoutHandler = null;
+    //写超时的时候由eventloop执行的task
+    Runnable writeTimeoutHandler = null;
     //发生了io异常就会记录这个异常,条件允许,我们会自动底层的channel
     private IOException exception;
     private CoSocketEventLoop coSocketEventLoop;
@@ -39,10 +42,10 @@ public final class CoSocket implements Closeable {
     boolean isInputCLose = false;
     boolean isOutPutCLose = false;
     //读缓存,一次从channel里面读好多数据的,然后写到readBuffer里面
-    private ByteBuf readBuffer;
+    ByteBuf readBuffer;
     //写缓存,如果使用者线程,写不是directBuffer的数据到缓存里面去,那么我们就手动先写到我们内置直接内存的writeBuffer里面去
     //然后在往真实的channel里面去写数据
-    private ByteBuf writeBuffer;
+    ByteBuf writeBuffer;
     BlockingReadWriteControl blockingRW = new BlockingReadWriteControl();
 
     public CoSocket() throws IOException {
@@ -481,6 +484,20 @@ public final class CoSocket implements Closeable {
     }
 
 
+    public void write(byte b[], int off, int len,boolean block) throws IOException {
+        if (b == null) {
+            throw new NullPointerException();
+        } else if ((off < 0) || (off > b.length) || (len < 0) ||
+                ((off + len) > b.length) || ((off + len) < 0)) {
+            throw new IndexOutOfBoundsException("off and len out of index");
+        } else if (len == 0) {
+            return;
+        }
+        prepareWriteBuf();
+        int writableBytes = writeBuffer.writableBytes();
+        flush();
+    }
+
     //block代表会阻塞(挂起当前线程或者协程)的等待数据一直可用,直到读超时发生,抛出读超时异常,或者遇到eof
     //block为false的话,没有数据可读的话,就会直接返回0 代表没有任何数据可读
     //eof的话,我们就直接返回-1
@@ -508,7 +525,7 @@ public final class CoSocket implements Closeable {
                 blockForRead();
                 //被selector线程唤醒了,
                 //在读一下,没有数据gg了要抛出异常给调用者
-                  readableBytes= prepareReadableBytes();
+                readableBytes = prepareReadableBytes();
                 if (readableBytes == 0) {
                     //这里就是读超时了,抛出读超时异常
                     throw new SocketTimeoutException("read from channel time out");
@@ -536,11 +553,10 @@ public final class CoSocket implements Closeable {
     }
 
     /**
-     *
      * @return 读取的的byte的数据
      * @throws IOException
      */
-    public int readBytes()throws IOException {
+    public int readBytes() throws IOException {
         if (isEof) {
             return -1;
         }
@@ -569,8 +585,7 @@ public final class CoSocket implements Closeable {
     }
 
     /**
-     *
-     * @return 还有多少可读的数据,在不堵塞的情况下,就是返回当前read缓冲区的数据,fixme 有可能返回0
+     * @return 还有多少可读的数据, 在不堵塞的情况下, 就是返回当前read缓冲区的数据, fixme 有可能返回0
      */
     public int available() throws IOException {
         prepareReadBuf();
@@ -589,17 +604,104 @@ public final class CoSocket implements Closeable {
     //todo
     void prepareReadBuf() throws IOException {
         if (readBuffer == null) {
-            if (isClosed()) {
-                throw new SocketException("channel already close");
-            }
-            AtomicInteger status = this.status;
-            int i = status.get();
-            //一旦读发生异常,我们自己会记录这个异常,并且修改读异常位
-            if (BitIntStatusUtils.isInStatus(i, CoSocketStatus.READ_EXCEPTION)) {
-                throw new SocketException("read from channel already happen exception and already close read");
-            }
+            checkReadOrWritable(CoSocketStatus.READ_EXCEPTION, "read from channel already happen exception and already close read");
             readBuffer = GlobalByteBufPool.getThreadHashGroup().applyDirect();
         }
+    }
+
+    void prepareWriteBuf() throws IOException {
+        if (writeBuffer == null) {
+            checkReadOrWritable(CoSocketStatus.WRITE_EXCEPTION, "write from channel already happen exception and already close read");
+            writeBuffer = GlobalByteBufPool.getThreadHashGroup().applyDirect();
+        }
+    }
+
+    //准备writeBuffer处于可以写的状态,配合prepareWriteBuf一起使用,不然有npe的可能性
+    private void prepareWriteable() throws  IOException {
+        if (!writeBuffer.isWritable()) {
+            if (!writeBuffer.isReadable()) {
+                writeBuffer.clear();
+            } else {
+                flush();
+            }
+        }
+    }
+
+    private void checkReadOrWritable(int avoidStatus, String s) throws SocketException {
+        if (isClosed()) {
+            throw new SocketException("channel already close");
+        }
+        AtomicInteger status = this.status;
+        int now = status.get();
+        if (BitIntStatusUtils.isInStatus(now, avoidStatus)) {
+            throw new SocketException(s);
+        }
+    }
+
+    public void flush() throws IOException {
+        if (writeBuffer == null) {
+            checkReadOrWritable(CoSocketStatus.WRITE_EXCEPTION, "write from channel already happen exception and already close read");
+            return;
+        } else {
+            int readableBytes = writeBuffer.readableBytes();
+            if (readableBytes > 0) {
+                int i;
+                try {
+                    while (true) {
+                        SocketChannel socketChannel = coChannel.getSocketChannel();
+                        i = writeBuffer.readBytes(socketChannel, writeBuffer.readableBytes());
+                        if (i == 0) {
+                            //挂起,让io线程来写完所有数据,然后被唤醒,或者抛出异常,被挂起的时间由
+                            // public void setInitialBlockMilliSeconds(long minBlockingTime) {}
+                            //    public void setMilliSecondPer1024B(long per1024B) {}
+                            //来决定的,超过时间还没有由io线程写完,就会抛出SocketTimeOutException,写超时异常
+                            waitForWrite();
+                            //todo
+                            break;
+                        }
+                        if (!writeBuffer.isReadable()) {
+                            break;
+                        }
+                    }
+                } catch (IOException e) {
+                    //释放ByteBuf,保存写异常的标志位,并且以后再也允许写了,
+                    writeBuffer.release();
+                    writeBuffer = null;
+                    BitIntStatusUtils.casAddStatus(this.status, CoSocketStatus.WRITE_EXCEPTION);
+                    //抛出异常出来
+                    throw e;
+                }
+                //flush完全之后,就直接clear掉
+                writeBuffer.clear();
+            }
+        }
+
+    }
+
+    //todo
+    private void waitForWrite() {
+        if (writeTimeoutHandler == null) {
+            writeTimeoutHandler = new Runnable() {
+                @Override
+                public void run() {
+                    coChannel.closeWriteListen();
+                    ssSupport.beContinue();
+                }
+            };
+        }
+        coChannel.eventLoop().execute(() -> {
+            coChannel.startWriteListen();
+            CoSocketConfig config = coChannel.getConfig();
+            long initialBlockMilliSeconds = config.getInitialBlockMilliSeconds();
+            long milliSecondPer1024B = config.getMilliSecondPer1024B();
+            int readableBytes = writeBuffer.readableBytes();
+            //多加一毫秒了,容错一下
+            int perCount = (readableBytes >> 10) +1;
+            long totalDelayTime = initialBlockMilliSeconds + perCount * milliSecondPer1024B;
+            coChannel.writeTimeoutFuture = coChannel.eventLoop().schedule(writeTimeoutHandler, totalDelayTime, TimeUnit.MILLISECONDS);
+        });
+        //在这里挂起了
+        ssSupport.suspend();
     }
 
     private int prepareReadableBytes() throws IOException {
@@ -681,6 +783,17 @@ public final class CoSocket implements Closeable {
 
     boolean handlerWriteActive() {
         //todo
+        int max = coChannel.getConfig().getMaxWriteSizePerOnce();
+        SocketChannel channel = coChannel.getSocketChannel();
+        try {
+            while (max != 0) {
+                writeBuffer.readBytes(channel, writeBuffer.readableBytes());
+                //完成写的操作 todo
+                max--;
+            }
+        } catch (IOException e) {
+            //todo
+        }
         return false;
     }
 
@@ -695,4 +808,25 @@ public final class CoSocket implements Closeable {
         readBuffer.skipBytes((int) realSkip);
         return realSkip;
     }
+
+    //写发生阻塞的时候,最小的阻塞时间,配合的还有一个,多少毫秒每K数据的堵塞时间,
+    // 总的允许的阻塞时间为 initial + N(K) * MilliSecondPer1024B
+    //我们不允许无限堵塞的发生,超过时间就会抛出SocketTimeOutException
+    public void setInitialBlockMilliSeconds(int minBlockingTime) {
+        coChannel.getConfig().setInitialBlockMilliSeconds(minBlockingTime);
+    }
+
+    public void setMilliSecondPer1024B(int per1024B) {
+        coChannel.getConfig().setMilliSecondPer1024B(per1024B);
+    }
+
+    public long getInitialBlockMilliSeconds() {
+        return coChannel.getConfig().getInitialBlockMilliSeconds();
+    }
+
+    //写数据的时候,每1024b的数据需要叠加的延迟时间
+    public long getMilliSecondPer1024B() {
+        return coChannel.getConfig().getMilliSecondPer1024B();
+    }
+
 }
