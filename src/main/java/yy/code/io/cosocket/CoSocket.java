@@ -411,6 +411,7 @@ public final class CoSocket implements Closeable {
     }
 
 
+    //todo 如果是io线程主动关闭channel(某种bug的原因),和我们手动cosocket的api是不一样的,要考虑这个问题
     //linger有没有设置,有没有注册到channel上面,要区分对待
     @Override
     public void close() throws IOException {
