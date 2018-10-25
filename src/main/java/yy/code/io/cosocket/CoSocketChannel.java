@@ -241,12 +241,29 @@ public final class CoSocketChannel {
         }
     }
 
-    //fixme netty里面shutdownOutput是需要 cancel selectKey的 我们要考虑这个怎么实现,会不会触发select 不堵塞
-    public static void shutdownOutput(SocketChannel channel) throws IOException {
-        if (PlatformDependent.javaVersion() >= 7) {
-            channel.shutdownOutput();
+
+    private void shutdownOutput0() {
+        try {
+            closeWriteListen();
+            if (PlatformDependent.javaVersion() >= 7) {
+                channel.shutdownOutput();
+            } else {
+                channel.socket().shutdownOutput();
+            }
+        } catch (IOException e) {
+            //忽略关闭的时候发生的异常
+            if (logger.isTraceEnabled()) {
+                logger.trace("close outPutStream happen exception .",e);
+            }
+        }
+
+    }
+
+    void shutdownOutput()  {
+        if (eventLoop().inEventLoop()) {
+            shutdownOutput0();
         } else {
-            channel.socket().shutdownOutput();
+            eventLoop().execute(this::shutdownOutput0);
         }
     }
 

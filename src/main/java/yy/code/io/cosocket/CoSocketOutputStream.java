@@ -8,35 +8,35 @@ import java.io.OutputStream;
  */
 public class CoSocketOutputStream extends OutputStream {
 
-    public void write(int b) throws IOException {
+    private CoSocket socket;
 
+    public CoSocketOutputStream(CoSocket socket) {
+        this.socket = socket;
     }
 
-//todo 完成这整个类
+    public void write(int b) throws IOException {
+        socket.write(b, true);
+    }
+
+
     public void write(byte b[]) throws IOException {
         write(b, 0, b.length);
     }
 
 
     public void write(byte b[], int off, int len) throws IOException {
-        if (b == null) {
-            throw new NullPointerException();
-        } else if ((off < 0) || (off > b.length) || (len < 0) ||
-                ((off + len) > b.length) || ((off + len) < 0)) {
-            throw new IndexOutOfBoundsException();
-        } else if (len == 0) {
-            return;
-        }
-        for (int i = 0; i < len; i++) {
-            write(b[off + i]);
-        }
+        socket.write(b, off, len, true);
     }
 
 
     public void flush() throws IOException {
+        socket.flush(true);
     }
 
 
     public void close() throws IOException {
+        //关闭之前手动刷新一波
+        socket.flush(true);
+        socket.shutdownOutput();
     }
 }

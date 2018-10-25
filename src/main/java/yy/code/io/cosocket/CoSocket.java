@@ -429,11 +429,11 @@ public final class CoSocket implements Closeable {
             ByteBuf readBuffer = this.readBuffer;
             ByteBuf writeBuffer = this.writeBuffer;
             //释放读写缓存
-            if (readBuffer != null && !readBuffer.isReadable()) {
+            if (readBuffer != null) {
                 this.readBuffer = null;
                 readBuffer.release();
             }
-            if (writeBuffer != null && !writeBuffer.isReadable()) {
+            if (writeBuffer != null) {
                 this.writeBuffer = null;
                 writeBuffer.release();
             }
@@ -444,20 +444,41 @@ public final class CoSocket implements Closeable {
     //fixme 我们不会挂起线程,等到关闭操作被IO线程操作并真实的发生,并且等待回馈,这样有代价,
     //大多情况我们认为这样是没有意义的,关闭的时候发生了异常又如何,提升效率,牺牲了一些东西
     public void shutdownInput() throws IOException {
-        //已经关闭就忽略
-        if (isClosed()) {
-            return;
-        }
+        checkConnectOrClose();
         if (isInputCLose) {
             return;
         }
         coChannel.shutdownInput();
+        ByteBuf readBuffer = this.readBuffer;
+        if (readBuffer != null) {
+            readBuffer.release();
+            this.readBuffer = null;
+        }
         isInputCLose = true;
     }
 
+    //检测连接或者关闭的问题
+    private void checkConnectOrClose() throws  IOException{
+        if (!isConnected()) {
+            throw new SocketException("Socket is not connected");
+        }
+        if (isClosed()) {
+            throw new SocketException("Socket closed");
+        }
+    }
 
     public void shutdownOutput() throws IOException {
-        CoSocketChannel.shutdownOutput(coChannel.getSocketChannel());
+        checkConnectOrClose();
+        if (isOutPutCLose) {
+            return;
+        }
+        coChannel.shutdownOutput();
+        ByteBuf writeBuffer = this.writeBuffer;
+        if (writeBuffer != null) {
+            writeBuffer.release();
+            this.writeBuffer = null;
+        }
+        isOutPutCLose = true;
     }
 
 
@@ -479,12 +500,12 @@ public final class CoSocket implements Closeable {
 
 
     public boolean isInputShutdown() {
-        return coChannel.isInputShutdown();
+        return isInputCLose;
     }
 
 
     public boolean isOutputShutdown() {
-        return coChannel.isOutputShutdown();
+        return isOutPutCLose;
     }
 
 
@@ -492,6 +513,32 @@ public final class CoSocket implements Closeable {
                                           int latency,
                                           int bandwidth) {
         getRealSocket().setPerformancePreferences(connectionTime, latency, bandwidth);
+    }
+
+    public int write(int b, boolean block) throws IOException {
+        prepareWriteBuf();
+        prepareWritable();
+        int i = writeBuffer.writableBytes();
+        if (i > 0) {
+            writeBuffer.writeByte(b);
+            return 1;
+        } else {
+            flush(false);
+            i = writeBuffer.writableBytes();
+            if (i > 0) {
+                writeBuffer.writeByte(b);
+                return 1;
+            } else {
+                if (block) {
+                    flush(true);
+                    writeBuffer.writeByte(b);
+                    return 1;
+                } else {
+                    //非阻塞,返回0
+                    return 0;
+                }
+            }
+        }
     }
 
     //todo review一遍 write单个字节的操作,
@@ -632,9 +679,13 @@ public final class CoSocket implements Closeable {
     }
 
 
-    //todo
     void prepareReadBuf() throws IOException {
         if (readBuffer == null) {
+            checkConnectOrClose();
+            if (isInputShutdown()) {
+                //输入流已经关闭了
+                throw new SocketException("input already close");
+            }
             checkReadOrWritable(CoSocketStatus.READ_EXCEPTION, "read from channel already happen exception and already close read");
             readBuffer = GlobalByteBufPool.getThreadHashGroup().applyDirect();
         }
@@ -642,6 +693,11 @@ public final class CoSocket implements Closeable {
 
     void prepareWriteBuf() throws IOException {
         if (writeBuffer == null) {
+            checkConnectOrClose();
+            if (isOutputShutdown()) {
+                //输入流已经关闭了
+                throw new SocketException("outPut already close");
+            }
             checkReadOrWritable(CoSocketStatus.WRITE_EXCEPTION, "write from channel already happen exception and already close read");
             writeBuffer = GlobalByteBufPool.getThreadHashGroup().applyDirect();
         }
@@ -696,7 +752,7 @@ public final class CoSocket implements Closeable {
                         throw e;
                     }
                     if (i == 0) {
-                        //tcp发送缓冲区慢了
+                        //tcp发送缓冲区满了
                         if (block) {
                             //挂起,让io线程来写完所有数据,然后被唤醒,或者抛出异常,被挂起的时间由
                             // public void setInitialBlockMilliSeconds(long minBlockingTime) {}
