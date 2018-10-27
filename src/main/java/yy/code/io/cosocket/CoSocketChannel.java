@@ -114,7 +114,7 @@ public final class CoSocketChannel {
      * 读事件触发了,唤醒我们的io线程,或者等待一会在通知我们的io线程,
      * 取决于我们的socket的handlerReaActive的实现
      */
-
+    //todo
     public void readActive() {
         if (readTimeoutFuture != null) {
             //取消读超时的task
@@ -140,30 +140,46 @@ public final class CoSocketChannel {
     }
 
     void startWriteListen() {
+        if (eventLoop().inEventLoop()) {
+            startWriteListen0();
+        } else {
+            eventLoop().execute(this::startReadListen0);
+        }
+    }
+
+    void startWriteListen0() {
         SelectionKey selectionKey = this.selectionKey;
         int interestOps = selectionKey.interestOps();
         if ((interestOps & SelectionKey.OP_WRITE) == 0) {
-            selectionKey.interestOps(interestOps & SelectionKey.OP_READ);
+            selectionKey.interestOps(interestOps & SelectionKey.OP_WRITE);
         }
     }
 
     void closeWriteListen() {
+        if (eventLoop().inEventLoop()) {
+            closeWriteListen0();
+        } else {
+            eventLoop().execute(this::closeWriteListen0);
+        }
+    }
+
+    void closeWriteListen0() {
         SelectionKey selectionKey = this.selectionKey;
         int interestOps = selectionKey.interestOps();
         if ((interestOps & SelectionKey.OP_WRITE) != 0) {
-            selectionKey.interestOps(interestOps & ~SelectionKey.OP_READ);
+            selectionKey.interestOps(interestOps & ~SelectionKey.OP_WRITE);
         }
     }
 
     void closeReadListen() {
         if (eventLoop().inEventLoop()) {
-            closeReadListen();
+            closeReadListen0();
         } else {
             eventLoop().execute(this::closeReadListen0);
         }
     }
 
-    void closeReadListen0() {
+    private void closeReadListen0() {
         SelectionKey selectionKey = this.selectionKey;
         if (selectionKey != null) {
             int interestOps = selectionKey.interestOps();
@@ -175,6 +191,14 @@ public final class CoSocketChannel {
     }
 
     void startReadListen() {
+        if (eventLoop().inEventLoop()) {
+            startReadListen0();
+        } else {
+            eventLoop().execute(this::startReadListen0);
+        }
+    }
+
+    private void startReadListen0() {
         SelectionKey selectionKey = this.selectionKey;
         int interestOps = selectionKey.interestOps();
         //打开自动读
@@ -253,13 +277,13 @@ public final class CoSocketChannel {
         } catch (IOException e) {
             //忽略关闭的时候发生的异常
             if (logger.isTraceEnabled()) {
-                logger.trace("close outPutStream happen exception .",e);
+                logger.trace("close outPutStream happen exception .", e);
             }
         }
 
     }
 
-    void shutdownOutput()  {
+    void shutdownOutput() {
         if (eventLoop().inEventLoop()) {
             shutdownOutput0();
         } else {
@@ -268,7 +292,7 @@ public final class CoSocketChannel {
     }
 
 
-     void shutdownInput()  {
+    void shutdownInput() {
         if (eventLoop().inEventLoop()) {
             shutdownInput0();
         } else {
@@ -278,7 +302,7 @@ public final class CoSocketChannel {
 
     private void shutdownInput0() {
         try {
-            closeReadListen0();
+            closeReadListen();
             SocketChannel channel = this.channel;
             if (PlatformDependent.javaVersion() >= 7) {
                 channel.shutdownInput();
@@ -288,7 +312,7 @@ public final class CoSocketChannel {
         } catch (IOException e) {
             //忽略关闭的时候发生的异常
             if (logger.isTraceEnabled()) {
-                logger.trace("close inputStream happen exception .",e);
+                logger.trace("close inputStream happen exception .", e);
             }
         }
 
@@ -331,14 +355,14 @@ public final class CoSocketChannel {
     private void waitForRead0() {
         if (innerCoSocket.readTimeoutHandler == null) {
             //我们可能会设置自己的readTimeHandler,这里给一个默认的readTimeOutHandler
-           innerCoSocket.readTimeoutHandler  = () -> {
-               //关闭读监听
-               closeReadListen();
-               innerCoSocket.handlerReadTimeOut();
-           };
+            innerCoSocket.readTimeoutHandler = () -> {
+                //关闭读监听
+                closeReadListen();
+                innerCoSocket.handlerReadTimeOut();
+            };
         }
         this.startReadListen();
-        this.readTimeoutFuture = eventLoop().schedule(innerCoSocket.readTimeoutHandler,getConfig().getSoTimeout(),TimeUnit.MILLISECONDS);
+        this.readTimeoutFuture = eventLoop().schedule(innerCoSocket.readTimeoutHandler, getConfig().getSoTimeout(), TimeUnit.MILLISECONDS);
     }
 
 }

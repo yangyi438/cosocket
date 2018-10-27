@@ -16,6 +16,7 @@ public final class CoSocketConfig {
     }
 
     public void setMaxWriteSizePerOnce(int maxWriteSizePerOnce) {
+        assert maxWriteSizePerOnce > 0;
         this.maxWriteSizePerOnce = maxWriteSizePerOnce;
     }
 

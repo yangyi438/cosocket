@@ -30,7 +30,10 @@ public class StrandSuspendContinueSupport {
         this.strand = null;
         //cas成功之后进去这个方法,有可能,业务线程没有来得及调用suspend方法,避免这种这样
         //  see yy.code.httpserver.servlet.NettyInputStream sleepForRead
-        strand.unpark();
+        if (strand != null) {
+            strand.unpark();
+
+        }
     }
 
 }
