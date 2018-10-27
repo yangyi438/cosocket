@@ -210,6 +210,7 @@ public final class CoSocketChannel {
     //关闭当前的socket连接,不能抛出异常 加上同步,已避免潜在的并发close竞争
     public synchronized void close() {
         //todo close 操作 要判断业务线程是不是park for read 或者 park for write ,io线程并发调用close操作会怎么样
+        //close的时候如果我们的业务线程正在等待读或者写的话 我们需要唤醒使用CoSocket的线程 todo
         //close在异步的情况下,是不是会影响cosocket的线程提交task. 等待读,等待写的问题 必须要解决的问题
         if (eventLoop().inEventLoop()) {
             closeAndRelease();
