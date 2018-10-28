@@ -6,15 +6,19 @@ import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import yy.code.io.cosocket.config.CoSocketConfig;
 import io.netty.channel.nio.CoSocketEventLoop;
+import yy.code.io.cosocket.status.BitIntStatusUtils;
+import yy.code.io.cosocket.status.CoSocketStatus;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Created by ${good-yy} on 2018/10/13.
@@ -53,10 +57,6 @@ public final class CoSocketChannel {
     }
 
     CoSocket innerCoSocket;
-    Runnable readRunable;
-    Runnable writeRunable;
-    Runnable connectRunable;
-    //连接超时的task todo
     ScheduledFuture<?> connectTimeoutFuture;
     ScheduledFuture<?> readTimeoutFuture;
     ScheduledFuture<?> writeTimeoutFuture;
@@ -103,7 +103,6 @@ public final class CoSocketChannel {
         } finally {
             if (connectTimeoutFuture != null) {
                 //取消连接超时检测,或者其他的检测
-                //todo 添加以后其他的task 取消
                 connectTimeoutFuture.cancel(false);
                 connectTimeoutFuture = null;
             }
@@ -114,7 +113,6 @@ public final class CoSocketChannel {
      * 读事件触发了,唤醒我们的io线程,或者等待一会在通知我们的io线程,
      * 取决于我们的socket的handlerReaActive的实现
      */
-    //todo
     public void readActive() {
         if (readTimeoutFuture != null) {
             //取消读超时的task
@@ -149,9 +147,11 @@ public final class CoSocketChannel {
 
     void startWriteListen0() {
         SelectionKey selectionKey = this.selectionKey;
-        int interestOps = selectionKey.interestOps();
-        if ((interestOps & SelectionKey.OP_WRITE) == 0) {
-            selectionKey.interestOps(interestOps & SelectionKey.OP_WRITE);
+        if (selectionKey != null) {
+            int interestOps = selectionKey.interestOps();
+            if ((interestOps & SelectionKey.OP_WRITE) == 0) {
+                selectionKey.interestOps(interestOps & SelectionKey.OP_WRITE);
+            }
         }
     }
 
@@ -208,25 +208,17 @@ public final class CoSocketChannel {
     }
 
     //关闭当前的socket连接,不能抛出异常 加上同步,已避免潜在的并发close竞争
-    public synchronized void close() {
-        //todo close 操作 要判断业务线程是不是park for read 或者 park for write ,io线程并发调用close操作会怎么样
-        //close的时候如果我们的业务线程正在等待读或者写的话 我们需要唤醒使用CoSocket的线程 todo
-        //close在异步的情况下,是不是会影响cosocket的线程提交task. 等待读,等待写的问题 必须要解决的问题
+    public void close() {
+        //close的时候如果我们的业务线程正在等待读或者写的话 我们需要唤醒使用CoSocket的线程
         if (eventLoop().inEventLoop()) {
             closeAndRelease();
         } else {
-            eventLoop().execute(new Runnable() {
-                @Override
-                public void run() {
-                    closeAndRelease();
-                }
-            });
+            eventLoop().execute(this::closeAndRelease);
         }
     }
 
     //关闭而且释放资源
     private void closeAndRelease() {
-        //todo 添加其他释放资源的操作
         if (isClose) {
             //防止重复进行close的方法了
             return;
@@ -251,8 +243,48 @@ public final class CoSocketChannel {
             executor.execute(() -> safeClose(channel));
         }
         this.isClose = true;
-        //todo 添加可能的需要唤醒功能,在rebuildSelector的时候
-        //fixme 确保万一
+        if (connectTimeoutFuture != null) {
+            connectTimeoutFuture.cancel(false);
+        }
+        if (readTimeoutFuture != null) {
+            readTimeoutFuture.cancel(false);
+        }
+        if (writeTimeoutFuture != null) {
+            writeTimeoutFuture.cancel(false);
+        }
+        AtomicInteger status = innerCoSocket.status;
+        while (true) {
+            int now = status.get();
+            int update = now;
+            boolean flag = false;
+            if (BitIntStatusUtils.isInStatus(now, CoSocketStatus.PARK_FOR_WRITE)) {
+                flag = true;
+                update = BitIntStatusUtils.convertStatus(update, CoSocketStatus.PARK_FOR_WRITE, CoSocketStatus.RUNNING);
+                update = BitIntStatusUtils.addStatus(update, CoSocketStatus.WRITE_EXCEPTION);
+            } else if (BitIntStatusUtils.isInStatus(now, CoSocketStatus.PARK_FOR_READ)) {
+                flag = true;
+                update = BitIntStatusUtils.convertStatus(update, CoSocketStatus.PARK_FOR_READ, CoSocketStatus.RUNNING);
+                update = BitIntStatusUtils.addStatus(update, CoSocketStatus.READ_EXCEPTION);
+            } else if (BitIntStatusUtils.isInStatus(now, CoSocketStatus.PARK_FOR_CONNECT)) {
+                flag = true;
+                update = BitIntStatusUtils.convertStatus(update, CoSocketStatus.PARK_FOR_CONNECT, CoSocketStatus.RUNNING);
+                update = BitIntStatusUtils.addStatus(update, CoSocketStatus.CONNECT_EXCEPTION);
+            }
+            if (flag) {
+                innerCoSocket.exception = new SocketException("channel close now");
+            }
+            update = BitIntStatusUtils.addStatus(update, CoSocketStatus.CLOSE);
+            if (status.compareAndSet(now, update)) {
+                if (flag) {
+                    //唤醒
+                    innerCoSocket.ssSupport.beContinue();
+                }
+                break;
+            } else {
+                continue;
+            }
+        }
+        isClose = true;
     }
 
 
@@ -268,6 +300,10 @@ public final class CoSocketChannel {
 
 
     private void shutdownOutput0() {
+        if (isClose) {
+            //已经close就跳过了
+            return;
+        }
         try {
             closeWriteListen();
             if (PlatformDependent.javaVersion() >= 7) {
@@ -302,6 +338,9 @@ public final class CoSocketChannel {
     }
 
     private void shutdownInput0() {
+        if (isClose) {
+            return;
+        }
         try {
             closeReadListen();
             SocketChannel channel = this.channel;
@@ -340,7 +379,7 @@ public final class CoSocketChannel {
     }
 
     //由CoSocket来调用,block一定的时间,直到阻塞时间到了,或者等待可读时间发生了
-    //todo 我们要处理发送放网络堵塞的原因,一直发慢包,那我们使用者线程就会频繁的因为读数据而挂起,这样会影响效率
+    // 我们要处理发送放网络堵塞的原因,一直发慢包,那我们使用者线程就会频繁的因为读数据而挂起,这样会影响效率
     //比如说 读几百b 就挂起一下,我们唤醒的时候,可以释放延后一下,防止这种循环式的等待读,然后挂起
     //但是这样也会造成延迟的问题,我们要均衡这些情况,平衡我们读数据的速率,和发送方发送的速率.
     //但是也要兼顾这样造成的延迟问题

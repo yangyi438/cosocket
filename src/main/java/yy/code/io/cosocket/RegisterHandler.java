@@ -31,7 +31,6 @@ public interface RegisterHandler {
             coChannel.connectTimeoutFuture = eventLoop.schedule(new Runnable() {
                 @Override
                 public void run() {
-                    coChannel.close();
                     //回调  errorConnect函数
                     CoSocket innerCoSocket = coChannel.innerCoSocket;
                     //代表已经释放过资源了
@@ -46,7 +45,6 @@ public interface RegisterHandler {
             if (channel.selectionKey != null) {
                 eventLoop.cancel(channel.selectionKey);
             }
-            channel.close();
             CoSocket innerCoSocket = channel.innerCoSocket;
             //因为我们处于连接状态的channel没有啥资源,直接赋值为true,代表已经释放了资源
             innerCoSocket.isCoChannelRelease = true;
