@@ -23,7 +23,7 @@ import java.util.Set;
 
 public final class SelectedSelectionKeySetSelector extends Selector {
     private final SelectedSelectionKeySet selectionKeys;
-    private final Selector delegate;
+    private final Selector  delegate;
 
     public SelectedSelectionKeySetSelector(Selector delegate, SelectedSelectionKeySet selectionKeys) {
         this.delegate = delegate;

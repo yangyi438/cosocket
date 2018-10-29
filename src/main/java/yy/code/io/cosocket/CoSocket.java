@@ -194,14 +194,14 @@ public final class CoSocket implements Closeable {
             }
             int forConnect = BitIntStatusUtils.addStatus(before, CoSocketStatus.PARK_FOR_CONNECT);
             forConnect = BitIntStatusUtils.removeStatus(forConnect, CoSocketStatus.RUNNING);
-            //这里直接set了,
             if (status.compareAndSet(before, forConnect)) {
                 break;
             }
         }
         ssSupport.prepareSuspend();
         coChannel.getConfig().setConnectionMilliSeconds(timeout);
-        coChannel.connect(epoint);
+        coChannel.getSocketChannel().connect(endpoint);
+        coChannel.connect();
         //fixme 连接不需要判断有没有close 的status操作
         ssSupport.suspend();
         //被唤醒了
@@ -236,6 +236,7 @@ public final class CoSocket implements Closeable {
             if (BitIntStatusUtils.isInStatus(now, CoSocketStatus.PARK_FOR_CONNECT)) {
                 update = BitIntStatusUtils.removeStatus(update, CoSocketStatus.PARK_FOR_CONNECT);
                 update = BitIntStatusUtils.addStatus(update, CoSocketStatus.RUNNING);
+                update = BitIntStatusUtils.addStatus(update, CoSocketStatus.CONNECT_SUCCESS);
                 if (status.compareAndSet(now, update)) {
                     ssSupport.beContinue();
                     break;

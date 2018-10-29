@@ -23,7 +23,8 @@ public final class CoSocketConfig {
     private int maxWriteSizePerOnce = 16;
     //连接超时默认就给3秒的时间了,我们的连接是必须要给连接超时的
     private int connectionMilliSeconds = 3 * 1024;
-    private int soTimeout;
+    //三秒读超时的事件
+    private int soTimeout = 3000;
     private int sendBufferSize;
     private int receiveBufferSize;
 

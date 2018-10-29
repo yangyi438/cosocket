@@ -374,7 +374,7 @@ public final class CoSocketChannel {
 
     //仅仅由CoSocket来调用,用来去连接对面,注意的是,我们这里的连接超时不是精确的
     //会生成一个队列到事件循环队列里面.等候执行,超时的取消task也是在netty的调度下,延迟执行的
-    public void connect(InetSocketAddress remote) {
+    public void connect() {
         eventLoop().register(this, SelectionKey.OP_CONNECT, RegisterHandler.CONNECTION_HANDLER);
     }
 

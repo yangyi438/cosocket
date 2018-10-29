@@ -39,7 +39,12 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
     private static final boolean DISABLE_KEYSET_OPTIMIZATION =
             SystemPropertyUtil.getBoolean("io.netty.noKeySetOptimization", false);
 
-    private static final ThreadLocal<WakeUpTime> WAKE_UP_TIME = new ThreadLocal<>();
+    private static final ThreadLocal<WakeUpTime> WAKE_UP_TIME = new ThreadLocal<WakeUpTime>(){
+        @Override
+        protected WakeUpTime initialValue() {
+            return new WakeUpTime();
+        }
+    };
 
     public static long getCurrentWakeUpTime(){
         return WAKE_UP_TIME.get().getCurrentNanoTime();
@@ -915,7 +920,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
     void register0(CoSocketChannel coChannel, int interestOps, RegisterHandler handler) {
         try {
             SocketChannel channel = coChannel.getSocketChannel();
-            SelectionKey selectionKey = channel.register(selector, interestOps);
+            SelectionKey selectionKey = channel.register(this.unwrappedSelector(), interestOps);
             handler.success(selectionKey, coChannel, this);
         } catch (IOException exception) {
             handler.error(exception,coChannel,this);

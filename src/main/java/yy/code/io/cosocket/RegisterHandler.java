@@ -27,6 +27,7 @@ public interface RegisterHandler {
         @Override
         public void success(SelectionKey selectionKey, final CoSocketChannel coChannel, final CoSocketEventLoop eventLoop) {
             coChannel.selectionKey = selectionKey;
+            selectionKey.attach(coChannel);
             int connectionMilliseconds = coChannel.getConfig().getConnectionMilliSeconds();
             coChannel.connectTimeoutFuture = eventLoop.schedule(new Runnable() {
                 @Override
