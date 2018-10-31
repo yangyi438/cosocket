@@ -19,9 +19,10 @@ public final class CoSocketConfig {
         assert maxWriteSizePerOnce > 0;
         this.maxWriteSizePerOnce = maxWriteSizePerOnce;
     }
-
+    //我们的io线程负责处理写的任务的时候,不堵塞的情况下,一次最多写次数,
+    //超过这个次数,做成一个task.延迟下执行,方便执行其他任务
     private int maxWriteSizePerOnce = 16;
-    //连接超时默认就给3秒的时间了,我们的连接是必须要给连接超时的
+    //连接超时默认就给3秒的时间了,我们的连接是必须要给连接超时的,不允许无限的不超时的连接
     private int connectionMilliSeconds = 3 * 1024;
     //三秒读超时的事件
     private int soTimeout = 3000;

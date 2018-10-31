@@ -1,5 +1,7 @@
 package yy.code.io.cosocket.status;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * Created by ${good-yy} on 2018/10/8.
  */
@@ -37,4 +39,29 @@ public final class CoSocketStatus {
     //连接成功了
     public static final int CONNECT_SUCCESS = 1 << 11;
 
+    public static void changeParkReadToRunning(AtomicInteger status) {
+        int now = status.get();
+        while (true) {
+            int update = BitIntStatusUtils.convertStatus(now, PARK_FOR_READ, RUNNING);
+            if (status.compareAndSet(now, update)) {
+                break;
+            } else {
+                now = status.get();
+                continue;
+            }
+        }
+    }
+
+    public static void changeParkWriteToRunning(AtomicInteger status) {
+        int now = status.get();
+        while (true) {
+            int update = BitIntStatusUtils.convertStatus(now, PARK_FOR_WRITE, RUNNING);
+            if (status.compareAndSet(now, update)) {
+                break;
+            } else {
+                now = status.get();
+                continue;
+            }
+        }
+    }
 }

@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketException;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 import java.util.concurrent.Executor;
@@ -38,8 +39,6 @@ public final class CoSocketChannel {
     private final CoSocketConfig config;
 
     private final CoSocketEventLoop eventLoop;
-
-    boolean isEof = false;
 
     //标志有没有调用了close的方法
     private boolean isClose = false;
@@ -147,12 +146,19 @@ public final class CoSocketChannel {
 
     void startWriteListen0() {
         SelectionKey selectionKey = this.selectionKey;
-        if (selectionKey != null) {
+        if (selectionKey == null) {
+            try {
+                this.selectionKey = this.getSocketChannel().register(eventLoop().unwrappedSelector(),SelectionKey.OP_READ);
+            } catch (ClosedChannelException e) {
+                e.printStackTrace();
+            }
+            return;
+        }
             int interestOps = selectionKey.interestOps();
             if ((interestOps & SelectionKey.OP_WRITE) == 0) {
                 selectionKey.interestOps(interestOps & SelectionKey.OP_WRITE);
             }
-        }
+
     }
 
     void closeWriteListen() {
@@ -200,6 +206,11 @@ public final class CoSocketChannel {
 
     private void startReadListen0() {
         SelectionKey selectionKey = this.selectionKey;
+        //有可能还没有注册我们的channel到selector上面,所以selectionKey为null
+        if (selectionKey == null) {
+          //  this.selectionKey = this.getSocketChannel().register(eventLoop().register();)
+            //todo
+        }
         int interestOps = selectionKey.interestOps();
         //打开自动读
         if ((interestOps & SelectionKey.OP_READ) == 0) {
@@ -252,6 +263,8 @@ public final class CoSocketChannel {
         if (writeTimeoutFuture != null) {
             writeTimeoutFuture.cancel(false);
         }
+        //我们取消所有相关的task了,也未必以后不会有task进来,因为添加 ***TimeOutFuture 是异步的
+        //添加的task还在线程待执行的队列中
         AtomicInteger status = innerCoSocket.status;
         while (true) {
             int now = status.get();

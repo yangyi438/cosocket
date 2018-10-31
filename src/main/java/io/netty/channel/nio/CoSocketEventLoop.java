@@ -788,7 +788,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
         }
     }
 
-    Selector unwrappedSelector() {
+    public Selector unwrappedSelector() {
         return unwrappedSelector;
     }
 

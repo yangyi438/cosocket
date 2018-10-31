@@ -4,7 +4,6 @@ package yy.code.io.cosocket;
 import io.netty.buffer.ByteBuf;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import org.HdrHistogram.AbstractHistogram;
 import yy.code.io.cosocket.config.CoSocketConfig;
 import io.netty.channel.nio.CoSocketEventLoop;
 import yy.code.io.cosocket.fiber.StrandSuspendContinueSupport;
@@ -34,10 +33,9 @@ public final class CoSocket implements Closeable {
     Runnable writeTimeoutHandler = null;
     //发生了io异常就会记录这个异常,条件允许,我们会自动关闭底层的channel
     IOException exception;
-    private CoSocketEventLoop coSocketEventLoop;
     CoSocketChannel coChannel;
     StrandSuspendContinueSupport ssSupport;
-    AtomicInteger status = new AtomicInteger(0);
+    final AtomicInteger status = new AtomicInteger(0);
     //出现异常或者正常关闭的时候的标志位,代表有没有释放过资源
     boolean isCoChannelRelease = false;
     boolean isEof = false;
@@ -63,13 +61,17 @@ public final class CoSocket implements Closeable {
         initDefault();
     }
 
+    CoSocket(SocketChannel channel, CoSocketConfig config, CoSocketEventLoop eventLoop) throws IOException {
+        initChannel(channel, config, eventLoop);
+    }
+
     private void initDefault() throws IOException {
         SocketChannel channel = SocketChannel.open();
         initChannel(channel, new CoSocketConfig(), CoSocketFactory.globalEventLoop.nextCoSocketEventLoop());
     }
 
     //初始化channel,eventLoop,StrandSuspendContinueSupport
-    private void initChannel(SocketChannel channel, CoSocketConfig config, CoSocketEventLoop eventLoop) throws IOException {
+    void initChannel(SocketChannel channel, CoSocketConfig config, CoSocketEventLoop eventLoop) throws IOException {
         assert eventLoop != null;
         assert channel != null;
         try {
@@ -82,9 +84,8 @@ public final class CoSocket implements Closeable {
             config.setSendBufferSize(socket.getSendBufferSize());
             config.setReceiveBufferSize(socket.getReceiveBufferSize());
             coChannel = new CoSocketChannel(channel, config, this, eventLoop);
-            //暂时就定quasar作为协程的实现,不做接口的形式了
+            //暂时就定quasar作为协程的实现,不做接口的形式了,以后做成接口的方式
             ssSupport = new StrandSuspendContinueSupport();
-            this.coSocketEventLoop = eventLoop;
         } catch (IOException e) {
             if (LOGGER.isTraceEnabled()) {
                 LOGGER.trace("open channel happen ioException{}", e);
@@ -467,7 +468,6 @@ public final class CoSocket implements Closeable {
     }
 
 
-
     //linger有没有设置,有没有注册到channel上面,要区分对待,见coChannel.close();方法
     @Override
     public void close() throws IOException {
@@ -713,15 +713,6 @@ public final class CoSocket implements Closeable {
         //挂起当前线程
         ssSupport.suspend();
         int now = status.get();
-        while (true) {
-            int update = BitIntStatusUtils.convertStatus(now, CoSocketStatus.PARK_FOR_READ, CoSocketStatus.RUNNING);
-            if (status.compareAndSet(now, update)) {
-                break;
-            } else {
-                now = status.get();
-                continue;
-            }
-        }
         if (BitIntStatusUtils.isInStatus(now, CoSocketStatus.READ_EXCEPTION)) {
             //提前释放读缓存
             releaseReadBuffer();
@@ -942,14 +933,6 @@ public final class CoSocket implements Closeable {
         ssSupport.suspend();
         //被唤醒了
         int now = this.status.get();
-        while (true) {
-            int update = BitIntStatusUtils.convertStatus(now, CoSocketStatus.PARK_FOR_WRITE, CoSocketStatus.RUNNING);
-            if (this.status.compareAndSet(now, update)) {
-                break;
-            } else {
-                now = this.status.get();
-            }
-        }
         if (BitIntStatusUtils.isInStatus(now, CoSocketStatus.WRITE_EXCEPTION)) {
             releaseWriteBuffer();
             //写超时发生了异常
@@ -1027,11 +1010,18 @@ public final class CoSocket implements Closeable {
         }
         long delay = blockingRW.reportReadActive(CoSocketEventLoop.getCurrentWakeUpTime());
         if (delay <= 0) {
+            //将要唤醒了,也直接唤醒状态机
+            CoSocketStatus.changeParkReadToRunning(this.status);
             //直接就唤醒
             ssSupport.beContinue();
         } else {
             if (delayWakeUpHandler == null) {
-                delayWakeUpHandler = () -> ssSupport.beContinue();
+                delayWakeUpHandler = () -> {
+                    if (BitIntStatusUtils.isInStatus(this.status.get(), CoSocketStatus.PARK_FOR_READ)) {
+                        CoSocketStatus.changeParkReadToRunning(this.status);
+                    }
+                    ssSupport.beContinue();
+                };
             }
             //延迟唤醒,纳秒为单位
             coChannel.eventLoop().schedule(delayWakeUpHandler, delay, TimeUnit.NANOSECONDS);
@@ -1080,6 +1070,9 @@ public final class CoSocket implements Closeable {
                 //写超时的task记得cancel
                 writeTimeoutFuture.cancel(false);
             }
+            //唤醒挂起的线程或者协程
+            CoSocketStatus.changeParkWriteToRunning(this.status);
+            ssSupport.beContinue();
             return true;
         } catch (IOException e) {
             while (true) {
