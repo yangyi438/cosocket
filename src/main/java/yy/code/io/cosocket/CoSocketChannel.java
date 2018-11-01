@@ -132,45 +132,39 @@ public final class CoSocketChannel {
         boolean closeWrite = innerCoSocket.handlerWriteActive();
         if (closeWrite) {
             //关闭写监听
-            closeWriteListen();
+            try {
+                closeWriteListen();
+            } catch (ClosedChannelException ignore) {
+
+            }
         }
     }
+
 
     void startWriteListen() {
-        if (eventLoop().inEventLoop()) {
-            startWriteListen0();
-        } else {
-            eventLoop().execute(this::startReadListen0);
-        }
-    }
-
-    void startWriteListen0() {
         SelectionKey selectionKey = this.selectionKey;
         if (selectionKey == null) {
             try {
-                this.selectionKey = this.getSocketChannel().register(eventLoop().unwrappedSelector(),SelectionKey.OP_READ);
+                this.selectionKey = this.getSocketChannel().register(eventLoop().unwrappedSelector(), SelectionKey.OP_READ);
             } catch (ClosedChannelException e) {
                 e.printStackTrace();
             }
             return;
         }
-            int interestOps = selectionKey.interestOps();
-            if ((interestOps & SelectionKey.OP_WRITE) == 0) {
-                selectionKey.interestOps(interestOps & SelectionKey.OP_WRITE);
-            }
-
-    }
-
-    void closeWriteListen() {
-        if (eventLoop().inEventLoop()) {
-            closeWriteListen0();
-        } else {
-            eventLoop().execute(this::closeWriteListen0);
+        int interestOps = selectionKey.interestOps();
+        if ((interestOps & SelectionKey.OP_WRITE) == 0) {
+            selectionKey.interestOps(interestOps & SelectionKey.OP_WRITE);
         }
+
     }
 
-    void closeWriteListen0() {
+
+
+    void closeWriteListen() throws ClosedChannelException {
         SelectionKey selectionKey = this.selectionKey;
+        if (selectionKey == null) {
+            selectionKey = this.selectionKey = this.getSocketChannel().register(eventLoop().unwrappedSelector(), SelectionKey.OP_READ, this);
+        }
         int interestOps = selectionKey.interestOps();
         if ((interestOps & SelectionKey.OP_WRITE) != 0) {
             selectionKey.interestOps(interestOps & ~SelectionKey.OP_WRITE);
@@ -196,20 +190,12 @@ public final class CoSocketChannel {
         }
     }
 
-    void startReadListen() {
-        if (eventLoop().inEventLoop()) {
-            startReadListen0();
-        } else {
-            eventLoop().execute(this::startReadListen0);
-        }
-    }
 
-    private void startReadListen0() {
+    void startReadListen() throws ClosedChannelException {
         SelectionKey selectionKey = this.selectionKey;
         //有可能还没有注册我们的channel到selector上面,所以selectionKey为null
         if (selectionKey == null) {
-          //  this.selectionKey = this.getSocketChannel().register(eventLoop().register();)
-            //todo
+            selectionKey = this.selectionKey = this.getSocketChannel().register(eventLoop().unwrappedSelector(), SelectionKey.OP_READ, this);
         }
         int interestOps = selectionKey.interestOps();
         //打开自动读
