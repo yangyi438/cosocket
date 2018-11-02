@@ -153,7 +153,7 @@ public final class CoSocketChannel {
         }
         int interestOps = selectionKey.interestOps();
         if ((interestOps & SelectionKey.OP_WRITE) == 0) {
-            selectionKey.interestOps(interestOps & SelectionKey.OP_WRITE);
+            selectionKey.interestOps(interestOps | SelectionKey.OP_WRITE);
         }
 
     }

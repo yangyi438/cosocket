@@ -30,6 +30,7 @@ public interface RegisterHandler {
             selectionKey.attach(coChannel);
             int connectionMilliseconds = coChannel.getConfig().getConnectionMilliSeconds();
             coChannel.connectTimeoutFuture = eventLoop.schedule(new Runnable() {
+
                 @Override
                 public void run() {
                     //回调  errorConnect函数

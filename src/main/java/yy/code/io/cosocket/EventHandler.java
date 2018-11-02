@@ -6,13 +6,13 @@ package yy.code.io.cosocket;
 public interface EventHandler {
 
     //处理写事件
-    void handlerWriteActive();
+    void writeActive();
 
     //处理连接事件
-    void handlerConnectActive();
+    void connectActive();
 
     //处理读事件
-    void handlerReadActive();
+    void readActive();
 
     //关闭事件循环
     void close();

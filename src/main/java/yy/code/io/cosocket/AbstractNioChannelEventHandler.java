@@ -20,17 +20,42 @@ public abstract class AbstractNioChannelEventHandler implements EventHandler {
         this.eventLoop = eventLoop;
     }
 
+    protected abstract WriteEventHandler getWriteHandler();
+
+    protected abstract ConnectEventHandler getConnectHandler();
+
+    protected abstract ReadEventHandler getReadHandler();
+
+    protected abstract CloseEventHandler getCloseHandler();
 
     @Override
-    public abstract void handlerWriteActive();
+    public void writeActive() {
+        WriteEventHandler writeEventHandler = getWriteHandler();
+        writeEventHandler.writeEventHandler(selectionKey, socketChannel, eventLoop);
+    }
+
 
     @Override
-    public abstract void handlerConnectActive();
+    public void connectActive() {
+        ConnectEventHandler connectEventHandler = getConnectHandler();
+        connectEventHandler.connectEventHandler(selectionKey, socketChannel, eventLoop);
+    }
+
 
     @Override
-    public abstract void handlerReadActive();
+    public  void readActive(){
+        ReadEventHandler readEventHandler = getReadHandler();
+        readEventHandler.readcEventHandler(selectionKey, socketChannel,eventLoop);
+    }
+
+
 
     @Override
-    public abstract void close();
+    public  void close(){
+        CloseEventHandler closeEventHandler = getCloseHandler();
+        closeEventHandler.closeEventHandler(selectionKey, socketChannel, eventLoop);
+    }
+
+
 
 }
