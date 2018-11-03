@@ -30,7 +30,7 @@ public final class CoSocket implements Closeable {
 
     Runnable delayWakeUpHandler = null;
 
-    //附件
+    //附件,某些api操作的时候,可以方便的带一个附件来操作
     Object attachment;
     public Object getAttachment() {
         return attachment;
@@ -200,8 +200,7 @@ public final class CoSocket implements Closeable {
 
         while (true) {
             int before = status.get();
-            //todo 注意这个close的监听位
-            if (BitIntStatusUtils.isInStatus(before, CoSocketStatus.CLOSE)) {
+            if (BitIntStatusUtils.isInStatus(before, CoSocketStatus.CONNECT_EXCEPTION)) {
                 //不允许连接失败了,再去连接,
                 throw new SocketException("connect already faille");
             }
@@ -1082,7 +1081,7 @@ public final class CoSocket implements Closeable {
             }
             int readableBytes = writeBuffer.readableBytes();
             if (readableBytes > 0) {
-                //和netty一样,给一个task,延迟下write到Channel里面
+                //和netty一样,给一个task,延迟下write到Channel里面,防止一直占用资源
                 writeLastWithTask();
                 return true;
             }
@@ -1122,9 +1121,9 @@ public final class CoSocket implements Closeable {
     //部分的写的任务包装成一个task来延迟执行
     private void writeLastWithTask() {
         eventHandler.getEventLoop().execute(() -> {
-            SelectionKey selectionKey = eventHandler.getSelectionKey();
             boolean closeW = handlerWriteActive();
             if (closeW) {
+                SelectionKey selectionKey = eventHandler.getSelectionKey();
                 SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_WRITE);
             }
         });

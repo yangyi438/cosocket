@@ -36,6 +36,7 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
         public void run() {
             SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_READ);
             coSocket.handlerReadTimeOut();
+            readTimeoutFuture = null;
         }
     };
     Runnable writeTimeOutHandler = new Runnable() {
@@ -51,6 +52,7 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
             }
             CoSocketStatus.changeParkWriteToRunning(status);
             SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_WRITE);
+            writeTimeoutFuture = null;
             coSocket.ssSupport.beContinue();
         }
     };
@@ -143,12 +145,7 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
         if (logger.isErrorEnabled()) {
             logger.error("error the eventLoop call the close");
         }
-        return new CloseEventHandler() {
-            @Override
-            public void closeEventHandler(SelectionKey selectionKey, SocketChannel channel, CoSocketEventLoop eventLoop) {
-                close();
-            }
-        };
+        return (selectionKey, channel, eventLoop) -> close();
     }
 
     public void  timeoutForReadActive(Runnable runnable, int maxWaitTime) {
@@ -180,6 +177,7 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
             this.connectTimeoutFuture = eventLoop.schedule(new Runnable() {
                 @Override
                 public void run() {
+                    connectTimeoutFuture = null;
                     //去除连接监听,同时抛出连接超时异常
                     SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_CONNECT);
                     coSocket.timeOutConnect(new SocketTimeoutException("connect timeOut"));
