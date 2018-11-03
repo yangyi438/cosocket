@@ -117,7 +117,7 @@ public class ServerCoSocket {
 
 
     public void close() throws IOException {
-        serverSocketChannel.socket().close();
+        serverSocketChannel.close();
     }
 
     //不暴漏serverSocketChannel
