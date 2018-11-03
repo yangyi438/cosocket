@@ -21,4 +21,10 @@ public final class SelectionKeyUtils {
             );
         }
     }
+
+    public static boolean isInStatus(SelectionKey selectionKey, int ops) {
+        int interestOps = selectionKey.interestOps();
+        return (interestOps & ops) != 0;
+    }
+
 }

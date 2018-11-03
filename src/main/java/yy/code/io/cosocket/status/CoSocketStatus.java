@@ -64,4 +64,18 @@ public final class CoSocketStatus {
             }
         }
     }
+
+    public static void changeParkConnectToRunning(AtomicInteger status) {
+        int now = status.get();
+        while (true) {
+            int update = BitIntStatusUtils.convertStatus(now, PARK_FOR_CONNECT, RUNNING);
+            if (status.compareAndSet(now, update)) {
+                break;
+            } else {
+                now = status.get();
+                continue;
+            }
+        }
+    }
+
 }

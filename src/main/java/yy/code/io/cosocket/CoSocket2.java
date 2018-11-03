@@ -9,6 +9,7 @@ import yy.code.io.cosocket.config.CoSocketConfig;
 import yy.code.io.cosocket.fiber.StrandSuspendContinueSupport;
 import yy.code.io.cosocket.status.BitIntStatusUtils;
 import yy.code.io.cosocket.status.CoSocketStatus;
+import yy.code.io.cosocket.status.SelectionKeyUtils;
 import yy.code.io.cosokcet.bytebuf.pool.GlobalByteBufPool;
 
 import java.io.Closeable;
@@ -16,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.*;
+import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -28,15 +30,13 @@ public final class CoSocket2 implements Closeable {
 
     Runnable delayWakeUpHandler = null;
 
-    //写超时的时候由eventloop执行的task
-    Runnable writeTimeoutHandler = null;
     //发生了io异常就会记录这个异常,条件允许,我们会自动关闭底层的channel
     IOException exception;
     CoSocketEventHandler eventHandler;
     StrandSuspendContinueSupport ssSupport;
     final AtomicInteger status = new AtomicInteger(0);
     //出现异常或者正常关闭的时候的标志位,代表有没有释放过资源
-    boolean isCoChannelRelease = false;
+    boolean isHandlerRelease = false;
     boolean isEof = false;
     boolean isInputCLose = false;
     boolean isOutPutCLose = false;
@@ -50,7 +50,7 @@ public final class CoSocket2 implements Closeable {
     //这个时候我们还是可以继续写的,但是一段数据,到底写了多少,就丢失了,只能得到一个异常的反馈,
     // 使用这个变量来记录最后一个写的操作到底写了多少数据,写入到我们的writeBuffer或者channel里面的数据都算是的
     private int lastWriteCount;
-    private CoSocketConfig config;
+    CoSocketConfig config;
 
     //最后一次写操作,到底写了多少数据,不论抛出异常了,还是怎么了,我们都要记录,主要为了超时写,抛出异常的时候,方便知道自己到底写了多少数据
     public int getLastWriteCount() {
@@ -85,7 +85,7 @@ public final class CoSocket2 implements Closeable {
             //接受缓存的大小和发送缓存的大小是必须的,我们需要这些参数,做一些特殊的处理
             config.setSendBufferSize(socket.getSendBufferSize());
             config.setReceiveBufferSize(socket.getReceiveBufferSize());
-            coChannel = new CoSocketChannel(channel, config, this, eventLoop);
+            eventHandler = new CoSocketEventHandler(this, null, channel, eventLoop);
             //暂时就定quasar作为协程的实现,不做接口的形式了,以后做成接口的方式
             ssSupport = new StrandSuspendContinueSupport();
         } catch (IOException e) {
@@ -191,8 +191,9 @@ public final class CoSocket2 implements Closeable {
 
         while (true) {
             int before = status.get();
-            if (BitIntStatusUtils.isInStatus(before, CoSocketStatus.CONNECT_EXCEPTION)) {
-                //不允许连接失败了,再去连接
+            //todo 注意这个close的监听位
+            if (BitIntStatusUtils.isInStatus(before, CoSocketStatus.CLOSE)) {
+                //不允许连接失败了,再去连接,
                 throw new SocketException("connect already faille");
             }
             int forConnect = BitIntStatusUtils.addStatus(before, CoSocketStatus.PARK_FOR_CONNECT);
@@ -202,26 +203,20 @@ public final class CoSocket2 implements Closeable {
             }
         }
         ssSupport.prepareSuspend();
-        coChannel.getConfig().setConnectionMilliSeconds(timeout);
-        coChannel.getSocketChannel().connect(endpoint);
-        coChannel.connect();
+        this.config.setConnectionMilliSeconds(timeout);
+        eventHandler.connect(endpoint);
         //fixme 连接不需要判断有没有close 的status操作
         ssSupport.suspend();
         //被唤醒了
         int now = status.get();
-        if (BitIntStatusUtils.isInStatus(now, CoSocketStatus.CONNECT_SUCCESS)) {
-            while (true) {
-                int running = BitIntStatusUtils.convertStatus(now, CoSocketStatus.PARK_FOR_CONNECT, CoSocketStatus.RUNNING);
-                if (status.compareAndSet(now, running)) {
-                    return;
-                } else {
-                    continue;
-                }
-            }
-        }
         if (BitIntStatusUtils.isInStatus(now, CoSocketStatus.CONNECT_EXCEPTION)) {
             //连接异常我们就直接抛出去了,这个时候使用者只需要调用close的操作了
             assert exception != null;
+            IOException exception = this.exception;
+            this.exception = null;
+            throw exception;
+        } else if (exception != null && exception instanceof SocketTimeoutException) {
+            //仅仅是超时异常的话,就抛出连接超时,不做其他的处理
             IOException exception = this.exception;
             this.exception = null;
             throw exception;
@@ -286,6 +281,32 @@ public final class CoSocket2 implements Closeable {
         ssSupport.beContinue();
         //之后coSocket线程应该就会被唤醒
     }
+    //连接超时
+     void timeOutConnect(SocketTimeoutException timeOut) {
+         while (true) {
+             int status = this.status.get();
+             int update;
+             if (BitIntStatusUtils.isInStatus(status, CoSocketStatus.PARK_FOR_CONNECT)) {
+                 update = BitIntStatusUtils.removeStatus(status, CoSocketStatus.PARK_FOR_CONNECT);
+             } else {
+                 if (LOGGER.isErrorEnabled()) {
+                     //不可能发生这样的情况的,只有epoll的bug 在rebuild的时候,重新注册selectKey的时候才会发生这样的事情
+                     LOGGER.error("not park for connect but wakeUp it is error");
+                 }
+                 this.exception = null;
+                 //这里直接return 不 ssSupport.beContinue(); 了
+                 return;
+             }
+             update = BitIntStatusUtils.addStatus(update, CoSocketStatus.RUNNING);
+             //理论上来说,不应该发生失败的情况的,必须的一次成功的
+             if (this.status.compareAndSet(status, update)) {
+                 this.exception = timeOut;
+                 break;
+             }
+         }
+         ssSupport.beContinue();
+         //之后coSocket线程应该就会被唤醒
+    }
 
 
     public void bind(SocketAddress bindpoint) throws IOException {
@@ -309,7 +330,7 @@ public final class CoSocket2 implements Closeable {
         if (security != null) {
             security.checkListen(port);
         }
-        coChannel.getSocketChannel().bind(bindpoint);
+        eventHandler.getSocketChannel().bind(bindpoint);
     }
 
     private void checkAddress(InetAddress addr, String op) {
@@ -332,7 +353,7 @@ public final class CoSocket2 implements Closeable {
     }
 
     private Socket getRealSocket() {
-        return coChannel.getSocketChannel().socket();
+        return eventHandler.getSocketChannel().socket();
     }
 
 
@@ -364,8 +385,8 @@ public final class CoSocket2 implements Closeable {
         if (isInputShutdown())
             throw new SocketException("Socket input is shutdown");
         final CoSocket2 s = this;
-        InputStream is = null;
-        is = new CoSocketInputStream(s);
+        InputStream is;
+        is = new CoSocketInputStream2(s);
         return is;
     }
 
@@ -378,7 +399,7 @@ public final class CoSocket2 implements Closeable {
         if (isOutputShutdown())
             throw new SocketException("Socket output is shutdown");
         final CoSocket2 s = this;
-        return new CoSocketOutputStream(s);
+        return new CoSocketOutputStream2(s);
     }
 
 
@@ -403,12 +424,12 @@ public final class CoSocket2 implements Closeable {
 
     //这和方法我们直接替换了,不会抛出异常
     public void setSoTimeout(int timeout) throws SocketException {
-        coChannel.getConfig().setSoTimeout(timeout);
+        this.config.setSoTimeout(timeout);
     }
 
     //这和方法我们直接替换了,不会抛出异常
     public int getSoTimeout() throws SocketException {
-        return coChannel.getConfig().getSoTimeout();
+        return this.config.getSoTimeout();
     }
 
     public void setSendBufferSize(int size)
@@ -416,7 +437,7 @@ public final class CoSocket2 implements Closeable {
         Socket socket = getRealSocket();
         socket.setSendBufferSize(size);
         //重新获取一下sendBufferSize
-        coChannel.getConfig().setSendBufferSize(socket.getSendBufferSize());
+        this.config.setSendBufferSize(socket.getSendBufferSize());
     }
 
 
@@ -430,7 +451,7 @@ public final class CoSocket2 implements Closeable {
         Socket socket = getRealSocket();
         socket.setReceiveBufferSize(size);
         //重新获取一下receiveBufferSize
-        coChannel.getConfig().setReceiveBufferSize(socket.getReceiveBufferSize());
+        this.config.setReceiveBufferSize(socket.getReceiveBufferSize());
     }
 
 
@@ -470,16 +491,16 @@ public final class CoSocket2 implements Closeable {
     }
 
 
-    //linger有没有设置,有没有注册到channel上面,要区分对待,见coChannel.close();方法
+    //linger有没有设置,有没有注册到channel上面,要区分对待,见eventHandler.close();方法
     @Override
     public void close() throws IOException {
         synchronized (closeLock) {
             if (isClosed()) {
                 return;
             }
-            if (!isCoChannelRelease) {
-                coChannel.close();
-                isCoChannelRelease = true;
+            if (!isHandlerRelease) {
+                eventHandler.close();
+                isHandlerRelease = true;
             }
             // 我们在这里就不抛出异常了,因为我们要再次挂起一下协程,这样有性能问题,
             //如果是已经抛出异常的情况下,close的操作没有多大的意义,
@@ -508,7 +529,7 @@ public final class CoSocket2 implements Closeable {
         if (isInputCLose) {
             return;
         }
-        coChannel.shutdownInput();
+        eventHandler.shutdownInput();
         releaseReadBuffer();
         isInputCLose = true;
     }
@@ -540,7 +561,7 @@ public final class CoSocket2 implements Closeable {
         if (isOutPutCLose) {
             return;
         }
-        coChannel.shutdownOutput();
+        eventHandler.shutdownOutput();
         releaseWriteBuffer();
         isOutPutCLose = true;
     }
@@ -824,7 +845,7 @@ public final class CoSocket2 implements Closeable {
             if (readableBytes > 0) {
                 int i;
                 while (true) {
-                    SocketChannel socketChannel = coChannel.getSocketChannel();
+                    SocketChannel socketChannel = eventHandler.getSocketChannel();
                     try {
                         i = writeBuffer.readBytes(socketChannel, writeBuffer.readableBytes());
                     } catch (IOException e) {
@@ -891,19 +912,6 @@ public final class CoSocket2 implements Closeable {
     private void waitForFLushWriteBuffer() throws IOException {
         AtomicInteger status = this.status;
         //writeTimeoutHandler  需要cancel
-        if (writeTimeoutHandler == null) {
-            writeTimeoutHandler = () -> {
-                int now = status.get();
-                if (!BitIntStatusUtils.isInStatus(now, CoSocketStatus.PARK_FOR_WRITE)) {
-                    //等待写超时事件发生的时候,中途其他原因,调用了CoSocketChannel的close()方法
-                    //那么所有等待事件会抹除,直接唤醒coSocket的线程(如果需要的话),这时候其他任务有可能冲突
-                    //加一下判断,防止冲突了
-                    return;
-                }
-                coChannel.closeWriteListen();
-                ssSupport.beContinue();
-            };
-        }
         //修改标志status为等待write
         //利用cas解决可见性的问题
         ssSupport.prepareSuspend();
@@ -921,17 +929,7 @@ public final class CoSocket2 implements Closeable {
                 break;
             }
         }
-        coChannel.eventLoop().execute(() -> {
-            coChannel.startWriteListen();
-            CoSocketConfig config = coChannel.getConfig();
-            long initialBlockMilliSeconds = config.getInitialBlockMilliSeconds();
-            long milliSecondPer1024B = config.getMilliSecondPer1024B();
-            int readableBytes = writeBuffer.readableBytes();
-            //多加一毫秒了,容错一下,
-            int perCount = (readableBytes >> 10) + 1;
-            long totalDelayTime = initialBlockMilliSeconds + perCount * milliSecondPer1024B;
-            coChannel.writeTimeoutFuture = coChannel.eventLoop().schedule(writeTimeoutHandler, totalDelayTime, TimeUnit.MILLISECONDS);
-        });
+        eventHandler.flushWriteBuffer();
         //在这里挂起了
         ssSupport.suspend();
         //被唤醒了
@@ -950,7 +948,7 @@ public final class CoSocket2 implements Closeable {
     private int prepareReadableBytes() throws IOException {
         if (!readBuffer.isReadable()) {
             readBuffer.clear();
-            SocketChannel channel = coChannel.getSocketChannel();
+            SocketChannel channel = eventHandler.getSocketChannel();
             int i;
             int writableBytes = readBuffer.writableBytes();
             try {
@@ -1027,7 +1025,7 @@ public final class CoSocket2 implements Closeable {
                 };
             }
             //延迟唤醒,纳秒为单位
-            coChannel.eventLoop().schedule(delayWakeUpHandler, delay, TimeUnit.NANOSECONDS);
+            eventHandler.getEventLoop().schedule(delayWakeUpHandler, delay, TimeUnit.NANOSECONDS);
         }
         return true;
     }
@@ -1045,8 +1043,8 @@ public final class CoSocket2 implements Closeable {
             }
             return true;
         }
-        int max = coChannel.getConfig().getMaxWriteSizePerOnce();
-        SocketChannel channel = coChannel.getSocketChannel();
+        int max = this.config.getMaxWriteSizePerOnce();
+        SocketChannel channel = eventHandler.getSocketChannel();
         try {
             while (max >= 0) {
                 int readableBytes = writeBuffer.readableBytes();
@@ -1068,16 +1066,14 @@ public final class CoSocket2 implements Closeable {
                 return true;
             }
             //写完了,也直接关闭写监听,并且释放写超时task
-            ScheduledFuture<?> writeTimeoutFuture = coChannel.writeTimeoutFuture;
-            if (writeTimeoutFuture != null) {
-                //写超时的task记得cancel
-                writeTimeoutFuture.cancel(false);
-            }
+            cancelWriteTimeOut();
             //唤醒挂起的线程或者协程
             CoSocketStatus.changeParkWriteToRunning(this.status);
             ssSupport.beContinue();
             return true;
         } catch (IOException e) {
+            //写异常也要关闭写超时
+            cancelWriteTimeOut();
             while (true) {
                 int before = status.get();
                 int writeError = BitIntStatusUtils.addStatus(before, CoSocketStatus.WRITE_EXCEPTION);
@@ -1093,12 +1089,22 @@ public final class CoSocket2 implements Closeable {
         }
     }
 
+    private void cancelWriteTimeOut() {
+        ScheduledFuture<?> writeTimeoutFuture = eventHandler.writeTimeoutFuture;
+        if (writeTimeoutFuture != null) {
+            //写超时的task记得cancel
+            writeTimeoutFuture.cancel(false);
+            eventHandler.writeTimeoutFuture = null;
+        }
+    }
+
     //部分的写的任务包装成一个task来延迟执行
     private void writeLastWithTask() {
-        coChannel.eventLoop().execute(() -> {
+        eventHandler.getEventLoop().execute(() -> {
+            SelectionKey selectionKey = eventHandler.getSelectionKey();
             boolean closeW = handlerWriteActive();
             if (closeW) {
-                coChannel.closeWriteListen();
+                SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_WRITE);
             }
         });
     }
@@ -1119,20 +1125,22 @@ public final class CoSocket2 implements Closeable {
     // 总的允许的阻塞时间为 initial + N(K) * MilliSecondPer1024B
     //我们不允许无限堵塞的发生,超过时间就会抛出SocketTimeOutException
     public void setInitialBlockMilliSeconds(int minBlockingTime) {
-        coChannel.getConfig().setInitialBlockMilliSeconds(minBlockingTime);
+        this.config.setInitialBlockMilliSeconds(minBlockingTime);
     }
 
     public void setMilliSecondPer1024B(int per1024B) {
-        coChannel.getConfig().setMilliSecondPer1024B(per1024B);
+        this.config.setMilliSecondPer1024B(per1024B);
     }
 
     public long getInitialBlockMilliSeconds() {
-        return coChannel.getConfig().getInitialBlockMilliSeconds();
+        return this.config.getInitialBlockMilliSeconds();
     }
 
     //写数据的时候,每1024b的数据需要叠加的延迟时间
     public long getMilliSecondPer1024B() {
-        return coChannel.getConfig().getMilliSecondPer1024B();
+        return this.config.getMilliSecondPer1024B();
     }
+
+
 
 }

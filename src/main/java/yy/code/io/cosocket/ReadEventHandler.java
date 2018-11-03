@@ -10,6 +10,6 @@ import java.nio.channels.SocketChannel;
  */
 public interface ReadEventHandler {
 
-    public void readcEventHandler(SelectionKey selectionKey, SocketChannel channel, CoSocketEventLoop eventLoop);
+    public void readEventHandler(SelectionKey selectionKey, SocketChannel channel, CoSocketEventLoop eventLoop);
 
 }
