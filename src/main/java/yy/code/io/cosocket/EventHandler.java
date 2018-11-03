@@ -15,6 +15,6 @@ public interface EventHandler {
     void readActive();
 
     //关闭事件循环
-    void close();
+    void closeActive();
 
 }

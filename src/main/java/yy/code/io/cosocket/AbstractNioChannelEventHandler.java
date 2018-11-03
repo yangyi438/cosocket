@@ -14,6 +14,18 @@ public abstract class AbstractNioChannelEventHandler implements EventHandler {
     protected SocketChannel socketChannel;
     protected CoSocketEventLoop eventLoop;
 
+    public void setSelectionKey(SelectionKey selectionKey) {
+        this.selectionKey = selectionKey;
+    }
+
+    public void setSocketChannel(SocketChannel socketChannel) {
+        this.socketChannel = socketChannel;
+    }
+
+    public void setEventLoop(CoSocketEventLoop eventLoop) {
+        this.eventLoop = eventLoop;
+    }
+
     public SelectionKey getSelectionKey() {
         return selectionKey;
     }
@@ -63,7 +75,7 @@ public abstract class AbstractNioChannelEventHandler implements EventHandler {
 
 
     @Override
-    public  void close(){
+    public  void closeActive(){
         CloseEventHandler closeEventHandler = getCloseHandler();
         closeEventHandler.closeEventHandler(selectionKey, socketChannel, eventLoop);
     }

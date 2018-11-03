@@ -29,19 +29,19 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
 
     private static InternalLogger logger = InternalLoggerFactory.getInstance(CoSocketEventHandler.class);
 
-    private final CoSocket2 coSocket2;
+    private final CoSocket coSocket;
 
     Runnable readTimeoutHandler = new Runnable() {
         @Override
         public void run() {
             SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_READ);
-            coSocket2.handlerReadTimeOut();
+            coSocket.handlerReadTimeOut();
         }
     };
     Runnable writeTimeOutHandler = new Runnable() {
         @Override
         public void run() {
-            AtomicInteger status = coSocket2.status;
+            AtomicInteger status = coSocket.status;
             int now = status.get();
             if (!BitIntStatusUtils.isInStatus(now, CoSocketStatus.PARK_FOR_WRITE)) {
                 //等待写超时事件发生的时候,中途其他原因,调用了CoSocketChannel的close()方法
@@ -51,7 +51,7 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
             }
             CoSocketStatus.changeParkWriteToRunning(status);
             SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_WRITE);
-            coSocket2.ssSupport.beContinue();
+            coSocket.ssSupport.beContinue();
         }
     };
 
@@ -62,7 +62,7 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
                 //取消读超时的task
                 readTimeoutFuture.cancel(false);
             }
-            boolean closeRead = coSocket2.handlerReadActive();
+            boolean closeRead = coSocket.handlerReadActive();
             if (closeRead) {
                 SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_READ);
             }
@@ -71,7 +71,7 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
     WriteEventHandler writeEventHandler = new WriteEventHandler() {
         @Override
         public void writeEventHandler(SelectionKey selectionKey, SocketChannel channel, CoSocketEventLoop eventLoop) {
-            boolean closeWrite = coSocket2.handlerWriteActive();
+            boolean closeWrite = coSocket.handlerWriteActive();
             if (closeWrite) {
                 //关闭写监听
                 SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_WRITE);
@@ -86,20 +86,20 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
                     throw new IOException("finishConnect happen error");
                 }
                 //连接成功
-                coSocket2.successConnect();
+                coSocket.successConnect();
                 SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_CONNECT);
             } catch (IOException e) {
                 try {
                     eventLoop.cancel(selectionKey);
                     channel.close();
                     //CoSocketChannel的相关的部分的资源已经释放完毕了
-                    coSocket2.isHandlerRelease = true;
+                    coSocket.isHandlerRelease = true;
                 } catch (IOException error) {
                     if (logger.isTraceEnabled()) {
                         logger.trace("connection channel error then close channel error{}", error);
                     }
                 }
-                coSocket2.errorConnect(e);
+                coSocket.errorConnect(e);
             } finally {
                 if (connectTimeoutFuture != null) {
                     //取消连接超时检测,或者其他的检测
@@ -115,12 +115,12 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
     ScheduledFuture<?> writeTimeoutFuture;
     private boolean isClose;
 
-    public CoSocketEventHandler(CoSocket2 coSocket2, SelectionKey selectionKey, SocketChannel socketChannel, CoSocketEventLoop eventLoop) {
+    public CoSocketEventHandler(CoSocket coSocket, SelectionKey selectionKey, SocketChannel socketChannel, CoSocketEventLoop eventLoop) {
         super(selectionKey, socketChannel, eventLoop);
-        this.coSocket2 = coSocket2;
+        this.coSocket = coSocket;
         assert socketChannel != null;
         assert eventLoop != null;
-        assert coSocket2 != null;
+        assert coSocket != null;
     }
 
     @Override
@@ -140,10 +140,18 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
 
     @Override
     protected CloseEventHandler getCloseHandler() {
-        return null;
+        if (logger.isErrorEnabled()) {
+            logger.error("error the eventLoop call the close");
+        }
+        return new CloseEventHandler() {
+            @Override
+            public void closeEventHandler(SelectionKey selectionKey, SocketChannel channel, CoSocketEventLoop eventLoop) {
+                close();
+            }
+        };
     }
 
-    public void timeoutForReadActive(Runnable runnable, int maxWaitTime) {
+    public void  timeoutForReadActive(Runnable runnable, int maxWaitTime) {
         if (eventLoop.inEventLoop()) {
             blockingForReadActive0(runnable, maxWaitTime);
         } else {
@@ -152,19 +160,29 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
     }
 
     public void connect(SocketAddress endpoint) {
+        if (eventLoop.inEventLoop()) {
+            connect0(endpoint);
+        } else {
+            eventLoop.execute(() -> {
+                connect0(endpoint);
+            });
+        }
+    }
+
+    public void connect0(SocketAddress endpoint) {
         try {
             socketChannel.connect(endpoint);
             if (!checkAndListenKey(SelectionKey.OP_CONNECT, CoSocketStatus.PARK_FOR_CONNECT, CoSocketStatus.CONNECT_EXCEPTION)) {
                 //register SelectKey的时候发生了错误
                 return;
             }
-            int connectionMilliseconds = coSocket2.config.getConnectionMilliSeconds();
+            int connectionMilliseconds = coSocket.config.getConnectionMilliSeconds();
             this.connectTimeoutFuture = eventLoop.schedule(new Runnable() {
                 @Override
                 public void run() {
                     //去除连接监听,同时抛出连接超时异常
                     SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_CONNECT);
-                    coSocket2.timeOutConnect(new SocketTimeoutException("connect timeOut"));
+                    coSocket.timeOutConnect(new SocketTimeoutException("connect timeOut"));
                 }
             }, connectionMilliseconds, TimeUnit.MILLISECONDS);
         } catch (IOException e) {
@@ -172,15 +190,13 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
                 logger.trace("connect happens error.", e);
             }
         }
-
     }
 
-    public void blockingForReadActive0(Runnable runnable, int maxWaitTime) {
+    public void blockingForReadActive0(Runnable timeRunnable, int maxWaitTime) {
         if (!checkAndListenKey(SelectionKey.OP_READ, CoSocketStatus.PARK_FOR_READ, CoSocketStatus.READ_EXCEPTION)) {
             return;
         }
-        SelectionKeyUtils.listenOps(selectionKey, SelectionKey.OP_READ);
-        this.readTimeoutFuture = eventLoop.schedule(runnable, maxWaitTime, TimeUnit.MILLISECONDS);
+        this.readTimeoutFuture = eventLoop.schedule(timeRunnable, maxWaitTime, TimeUnit.MILLISECONDS);
     }
 
     private boolean checkAndListenKey(int listenOps, int alsoStatus, int registerErrorOps) {
@@ -193,10 +209,13 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
                     logger.trace("register for read happen error .", e);
                 }
                 if (!(e instanceof IOException)) {
+                    if (logger.isErrorEnabled()) {
+                        logger.error("not a IOException.", e);
+                    }
                     e = new IOException(e);
                 }
                 //调用连接错误
-                AtomicInteger status = coSocket2.status;
+                AtomicInteger status = coSocket.status;
                 while (true) {
                     int now = status.get();
                     if (!BitIntStatusUtils.isInStatus(now, alsoStatus)) {
@@ -206,9 +225,9 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
                     update = BitIntStatusUtils.convertStatus(now, alsoStatus, CoSocketStatus.RUNNING);
                     update = BitIntStatusUtils.addStatus(update, registerErrorOps);
                     if (status.compareAndSet(now, update)) {
-                        coSocket2.exception = (IOException) e;
+                        coSocket.exception = (IOException) e;
                         //wakeUp
-                        coSocket2.ssSupport.beContinue();
+                        coSocket.ssSupport.beContinue();
                         return false;
                     }
                 }
@@ -355,7 +374,7 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
         }
         //我们取消所有相关的task了,也未必以后不会有task进来,因为添加 ***TimeOutFuture 是异步的
         //添加的task还在线程待执行的队列中,但是我们由status状态机. 控制多余的task来执行
-        AtomicInteger status = coSocket2.status;
+        AtomicInteger status = coSocket.status;
         while (true) {
             int now = status.get();
             int update = now;
@@ -374,13 +393,13 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
                 update = BitIntStatusUtils.addStatus(update, CoSocketStatus.CONNECT_EXCEPTION);
             }
             if (flag) {
-                coSocket2.exception = new SocketException("channel close now");
+                coSocket.exception = new SocketException("channel close now");
             }
             update = BitIntStatusUtils.addStatus(update, CoSocketStatus.CLOSE);
             if (status.compareAndSet(now, update)) {
                 if (flag) {
                     //唤醒
-                    coSocket2.ssSupport.beContinue();
+                    coSocket.ssSupport.beContinue();
                 }
                 break;
             } else {
@@ -405,10 +424,10 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
             //监听或者发生错误
             return;
         }
-        CoSocketConfig config = this.coSocket2.config;
+        CoSocketConfig config = this.coSocket.config;
         long initialBlockMilliSeconds = config.getInitialBlockMilliSeconds();
         long milliSecondPer1024B = config.getMilliSecondPer1024B();
-        ByteBuf writeBuffer = coSocket2.writeBuffer;
+        ByteBuf writeBuffer = coSocket.writeBuffer;
         int readableBytes = writeBuffer.readableBytes();
         //多加一毫秒了,容错一下,
         int perCount = (readableBytes >> 10) + 1;

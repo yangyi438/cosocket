@@ -10,8 +10,7 @@ import io.netty.util.internal.ReflectionUtil;
 import io.netty.util.internal.SystemPropertyUtil;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
-import yy.code.io.cosocket.CoSocketChannel;
-import yy.code.io.cosocket.RegisterHandler;
+import yy.code.io.cosocket.AbstractNioChannelEventHandler;
 import yy.code.io.cosocket.eventloop.CoSocketEventLoopGroup;
 
 import java.io.IOException;
@@ -349,9 +348,9 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
                 key.cancel();
                 SelectionKey newKey = key.channel().register(newSelectorTuple.unwrappedSelector, interestOps, a);
                 //fixme doSomeChange in base on netty
-                if (a instanceof CoSocketChannel) {
-                    CoSocketChannel channel = (CoSocketChannel) a;
-                    channel.selectionKey = newKey;
+                if (a instanceof AbstractNioChannelEventHandler) {
+                    AbstractNioChannelEventHandler channel = (AbstractNioChannelEventHandler) a;
+                    channel.setSelectionKey(newKey);
                 } else if (a instanceof AbstractNioChannel) {
                     // Update SelectionKey
                     ((AbstractNioChannel) a).selectionKey = newKey;
@@ -360,9 +359,9 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             } catch (Exception e) {
                 logger.warn("Failed to re-register a Channel to the new Selector.", e);
                 try {
-                    if (a instanceof CoSocketChannel) {
-                        CoSocketChannel channel = (CoSocketChannel) a;
-                        channel.close();
+                    if (a instanceof AbstractNioChannelEventHandler) {
+                        AbstractNioChannelEventHandler channel = (AbstractNioChannelEventHandler) a;
+                        channel.closeActive();
                     } else if (a instanceof AbstractNioChannel) {
                         AbstractNioChannel ch = (AbstractNioChannel) a;
                         ch.unsafe().close(ch.unsafe().voidPromise());
@@ -541,7 +540,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             i.remove();
 
 
-            processSelectedKey(k, (CoSocketChannel) a);
+            processSelectedKey(k, (AbstractNioChannelEventHandler) a);
 
 
             if (!i.hasNext()) {
@@ -571,8 +570,8 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
 
             final Object a = k.attachment();
             //加上了我们的CoSocketChannel
-            if (a instanceof CoSocketChannel) {
-                processSelectedKey(k, (CoSocketChannel) a);
+            if (a instanceof AbstractNioChannelEventHandler) {
+                processSelectedKey(k, (AbstractNioChannelEventHandler) a);
             } else if (a instanceof AbstractNioChannel) {
                 processSelectedKey(k, (AbstractNioChannel) a);
             } else {
@@ -591,11 +590,11 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
         }
     }
 
-    private void processSelectedKey(SelectionKey k, CoSocketChannel ch) {
+    private void processSelectedKey(SelectionKey k, AbstractNioChannelEventHandler ch) {
         if (!k.isValid()) {
             final EventLoop eventLoop;
             try {
-                eventLoop = ch.eventLoop();
+                eventLoop = ch.getEventLoop();
             } catch (Throwable ignored) {
                 // If the channel implementation throws an exception because there is no event loop, we ignore this
                 // because we are only trying to determine if ch is registered to this event loop and thus has authority
@@ -611,7 +610,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             }
             //关闭channel
             try {
-                ch.close();
+                ch.closeActive();
             } catch (Throwable closeErr) {
                 if (logger.isTraceEnabled()) {
                     logger.trace("could not happen error{}", closeErr);
@@ -626,7 +625,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             // the NIO JDK channel implementation may throw a NotYetConnectedException.
             if ((readyOps & SelectionKey.OP_CONNECT) != 0) {
                 try {
-                    ch.finishConnect();
+                    ch.connectActive();
                 } catch (Throwable ignore) {
                     if (logger.isTraceEnabled()) {
                         logger.trace("could not happen error{}", ignore);
@@ -663,7 +662,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
         } catch (CancelledKeyException ignored) {
             //关闭channel
             try {
-                ch.close();
+                ch.closeActive();
             } catch (Throwable closeErr) {
                 if (logger.isTraceEnabled()) {
                     logger.trace("could not happen error{}", closeErr);
@@ -901,31 +900,5 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             logger.warn("Failed to update SelectionKeys.", t);
         }
     }
-
-
-    //fixme 这里添加了注册我们的CoSocketChannel,在netty的基础上修改的,RegisterHandler的方法不能自己抛出异常
-    public void register(final CoSocketChannel coChannel, final int interestOps, final RegisterHandler handler)  {
-        if (inEventLoop()) {
-            register0(coChannel, interestOps, handler);
-        } else {
-            this.execute(new Runnable() {
-                @Override
-                public void run() {
-                    register0(coChannel, interestOps, handler);
-                }
-            });
-        }
-    }
-
-    void register0(CoSocketChannel coChannel, int interestOps, RegisterHandler handler) {
-        try {
-            SocketChannel channel = coChannel.getSocketChannel();
-            SelectionKey selectionKey = channel.register(this.unwrappedSelector(), interestOps);
-            handler.success(selectionKey, coChannel, this);
-        } catch (IOException exception) {
-            handler.error(exception,coChannel,this);
-        }
-    }
-
 
 }
