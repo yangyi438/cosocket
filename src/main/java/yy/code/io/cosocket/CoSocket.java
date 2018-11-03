@@ -30,6 +30,15 @@ public final class CoSocket implements Closeable {
 
     Runnable delayWakeUpHandler = null;
 
+    //附件
+    Object attachment;
+    public Object getAttachment() {
+        return attachment;
+    }
+
+    public void setAttachment(Object attachment) {
+        this.attachment = attachment;
+    }
     //发生了io异常就会记录这个异常,条件允许,我们会自动关闭底层的channel
     IOException exception;
     CoSocketEventHandler eventHandler;
@@ -627,6 +636,7 @@ public final class CoSocket implements Closeable {
         }
     }
 
+
     //block为true代表一定要刷新所有数据,否则,抛出io异常,或者超时异常,getLastWriteCount返回超时异常的时候,到底写了数据
     public int write(byte b[], int off, int len, boolean block) throws IOException {
         if (b == null) {
@@ -669,6 +679,7 @@ public final class CoSocket implements Closeable {
                 }
             }
         }
+
     }
 
     //block代表会阻塞(挂起当前线程或者协程)的等待数据一直可用,直到读超时发生,抛出读超时异常,或者遇到eof
@@ -1150,6 +1161,7 @@ public final class CoSocket implements Closeable {
     public long getMilliSecondPer1024B() {
         return this.config.getMilliSecondPer1024B();
     }
+
 
 
 }
