@@ -132,11 +132,7 @@ public final class CoSocketChannel {
         boolean closeWrite = innerCoSocket.handlerWriteActive();
         if (closeWrite) {
             //关闭写监听
-            try {
-                closeWriteListen();
-            } catch (ClosedChannelException ignore) {
-
-            }
+            closeWriteListen();
         }
     }
 
@@ -159,12 +155,8 @@ public final class CoSocketChannel {
     }
 
 
-
-    void closeWriteListen() throws ClosedChannelException {
+    void closeWriteListen() {
         SelectionKey selectionKey = this.selectionKey;
-        if (selectionKey == null) {
-            selectionKey = this.selectionKey = this.getSocketChannel().register(eventLoop().unwrappedSelector(), SelectionKey.OP_READ, this);
-        }
         int interestOps = selectionKey.interestOps();
         if ((interestOps & SelectionKey.OP_WRITE) != 0) {
             selectionKey.interestOps(interestOps & ~SelectionKey.OP_WRITE);
@@ -191,12 +183,9 @@ public final class CoSocketChannel {
     }
 
 
-    void startReadListen() throws ClosedChannelException {
+    void startReadListen() {
         SelectionKey selectionKey = this.selectionKey;
         //有可能还没有注册我们的channel到selector上面,所以selectionKey为null
-        if (selectionKey == null) {
-            selectionKey = this.selectionKey = this.getSocketChannel().register(eventLoop().unwrappedSelector(), SelectionKey.OP_READ, this);
-        }
         int interestOps = selectionKey.interestOps();
         //打开自动读
         if ((interestOps & SelectionKey.OP_READ) == 0) {
