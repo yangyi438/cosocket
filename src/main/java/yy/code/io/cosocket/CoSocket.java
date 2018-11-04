@@ -204,6 +204,10 @@ public final class CoSocket implements Closeable {
                 //不允许连接失败了,再去连接,
                 throw new SocketException("connect already faille");
             }
+            //处于close的时候,也要关闭
+            if (BitIntStatusUtils.isInStatus(before, CoSocketStatus.CLOSE)) {
+                throw new SocketException("channel already close");
+            }
             int forConnect = BitIntStatusUtils.addStatus(before, CoSocketStatus.PARK_FOR_CONNECT);
             forConnect = BitIntStatusUtils.removeStatus(forConnect, CoSocketStatus.RUNNING);
             if (status.compareAndSet(before, forConnect)) {
@@ -222,12 +226,10 @@ public final class CoSocket implements Closeable {
             assert exception != null;
             IOException exception = this.exception;
             this.exception = null;
+            //我们自己关闭连接了释放资源,有可能这个时候间隙连接已经建立了,
+            close();
             throw exception;
-        } else if (exception != null && exception instanceof SocketTimeoutException) {
-            //仅仅是超时异常的话,就抛出连接超时,不做其他的处理
-            IOException exception = this.exception;
-            this.exception = null;
-            throw exception;
+            //连接超时的问题,我们处理也是算错误,而且不在允许重新连接了
         } else if (exception == null) {
             //success
             return;
@@ -293,31 +295,9 @@ public final class CoSocket implements Closeable {
         //之后coSocket线程应该就会被唤醒
     }
 
-    //连接超时
+    //连接超时,连接一旦超时,就直接干掉chanel,不再允许重新连接
     void timeOutConnect(SocketTimeoutException timeOut) {
-        while (true) {
-            int status = this.status.get();
-            int update;
-            if (BitIntStatusUtils.isInStatus(status, CoSocketStatus.PARK_FOR_CONNECT)) {
-                update = BitIntStatusUtils.removeStatus(status, CoSocketStatus.PARK_FOR_CONNECT);
-            } else {
-                if (LOGGER.isErrorEnabled()) {
-                    //不可能发生这样的情况的,只有epoll的bug 在rebuild的时候,重新注册selectKey的时候才会发生这样的事情
-                    LOGGER.error("not park for connect but wakeUp it is error");
-                }
-                this.exception = null;
-                //这里直接return 不 ssSupport.beContinue(); 了
-                return;
-            }
-            update = BitIntStatusUtils.addStatus(update, CoSocketStatus.RUNNING);
-            //理论上来说,不应该发生失败的情况的,必须的一次成功的
-            if (this.status.compareAndSet(status, update)) {
-                this.exception = timeOut;
-                break;
-            }
-        }
-        ssSupport.beContinue();
-        //之后coSocket线程应该就会被唤醒
+        errorConnect(timeOut);
     }
 
 
@@ -416,6 +396,9 @@ public final class CoSocket implements Closeable {
 
 
     public void setTcpNoDelay(boolean on) throws SocketException {
+        if (isClosed()) {
+            return;
+        }
         getRealSocket().setTcpNoDelay(on);
     }
 
@@ -425,6 +408,10 @@ public final class CoSocket implements Closeable {
     }
 
     public void setSoLinger(boolean on, int linger) throws SocketException {
+        if (isClosed()) {
+            //关闭了,就忽略修改关键的属性
+            return;
+        }
         getRealSocket().setSoLinger(on, linger);
     }
 
@@ -446,6 +433,9 @@ public final class CoSocket implements Closeable {
 
     public void setSendBufferSize(int size)
             throws SocketException {
+        if (isClosed()) {
+            return;
+        }
         Socket socket = getRealSocket();
         socket.setSendBufferSize(size);
         //重新获取一下sendBufferSize
@@ -460,6 +450,9 @@ public final class CoSocket implements Closeable {
 
     public void setReceiveBufferSize(int size)
             throws SocketException {
+        if (isClosed()) {
+            return;
+        }
         Socket socket = getRealSocket();
         socket.setReceiveBufferSize(size);
         //重新获取一下receiveBufferSize
@@ -474,6 +467,9 @@ public final class CoSocket implements Closeable {
 
 
     public void setKeepAlive(boolean on) throws SocketException {
+        if (isClosed()) {
+            return;
+        }
         getRealSocket().setKeepAlive(on);
     }
 
@@ -484,6 +480,9 @@ public final class CoSocket implements Closeable {
 
 
     public void setTrafficClass(int tc) throws SocketException {
+        if (isClosed()) {
+            return;
+        }
         getRealSocket().setTrafficClass(tc);
     }
 
@@ -494,6 +493,9 @@ public final class CoSocket implements Closeable {
 
 
     public void setReuseAddress(boolean on) throws SocketException {
+        if (isClosed()) {
+            return;
+        }
         getRealSocket().setReuseAddress(on);
     }
 
@@ -555,12 +557,12 @@ public final class CoSocket implements Closeable {
     }
 
     //检测连接或者关闭的问题
-    private void checkConnectOrClose() throws IOException {
-        if (!isConnected()) {
-            throw new SocketException("Socket is not connected");
-        }
+    private void checkConnectOrClose() throws SocketException {
         if (isClosed()) {
             throw new SocketException("Socket closed");
+        }
+        if (!isConnected()) {
+            throw new SocketException("Socket is not connected");
         }
         int now = this.status.get();
         if (BitIntStatusUtils.isInStatus(now, CoSocketStatus.CLOSE)) {
