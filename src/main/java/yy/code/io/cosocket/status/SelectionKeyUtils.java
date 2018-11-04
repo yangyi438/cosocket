@@ -10,7 +10,7 @@ public final class SelectionKeyUtils {
     public static void listenOps(SelectionKey selectionKey, int ops) {
         int interestOps = selectionKey.interestOps();
         if ((interestOps & ops) == 0) {
-            selectionKey.interestOps(interestOps | SelectionKey.OP_READ);
+            selectionKey.interestOps(interestOps | ops);
         }
     }
 

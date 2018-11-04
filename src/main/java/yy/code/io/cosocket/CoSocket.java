@@ -77,7 +77,6 @@ public final class CoSocket implements Closeable {
     private void initDefault() throws IOException {
         SocketChannel channel = SocketChannel.open();
         CoSocketConfig config = new CoSocketConfig();
-        this.config = config;
         initChannel(channel, config, CoSocketFactory.globalEventLoop.nextCoSocketEventLoop());
     }
 
@@ -97,6 +96,7 @@ public final class CoSocket implements Closeable {
             eventHandler = new CoSocketEventHandler(this, null, channel, eventLoop);
             //暂时就定quasar作为协程的实现,不做接口的形式了,以后做成接口的方式
             ssSupport = new StrandSuspendContinueSupport();
+            this.config = config;
         } catch (IOException e) {
             if (LOGGER.isTraceEnabled()) {
                 LOGGER.trace("open channel happen ioException{}", e);
@@ -228,6 +228,9 @@ public final class CoSocket implements Closeable {
             IOException exception = this.exception;
             this.exception = null;
             throw exception;
+        } else if (exception == null) {
+            //success
+            return;
         } else {
             //连接的结果只有成功,或者失败,不应该有其他的情况的,发生了应该就是内部错误
             throw new IllegalStateException("could not happen may someError");
@@ -690,9 +693,6 @@ public final class CoSocket implements Closeable {
         } else if (off < 0 || length < 0 || length > b.length - off) {
             throw new IndexOutOfBoundsException();
         }
-        if (isEof) {
-            return -1;
-        }
         prepareReadBuf();
         int readableBytes = prepareReadableBytes();
         if (readableBytes < 0) {
@@ -762,19 +762,16 @@ public final class CoSocket implements Closeable {
      * @throws IOException
      */
     public int readBytes() throws IOException {
-        if (isEof) {
-            return -1;
-        }
         prepareReadBuf();
         int readableBytes = prepareReadableBytes();
         if (readableBytes > 0) {
-            return readBuffer.readableBytes();
+            return readBuffer.readByte();
         }
         if (readableBytes == 0) {
             blockForReadWithTimeOut();
             readableBytes = prepareReadableBytes();
             if (readableBytes > 0) {
-                return readBuffer.readableBytes();
+                return readBuffer.readByte();
             }
             if (readableBytes == 0) {
                 //还没有读到数据,就抛抛出超时异常了
@@ -881,7 +878,7 @@ public final class CoSocket implements Closeable {
                         //tcp发送缓冲区满了
                         if (block) {
                             //挂起,让io线程来写完所有数据,然后被唤醒,或者抛出异常,被挂起的时间由
-                            // public void setInitialBlockMilliSeconds(long minBlockingTime) {}
+                            // public void setInitialFlushBlockMilliSeconds(long minBlockingTime) {}
                             //    public void setMilliSecondPer1024B(long per1024B) {}
                             //来决定的,超过时间还没有由io线程写完,就会抛出SocketTimeOutException,写超时异常
                             waitForFLushWriteBuffer();
@@ -966,6 +963,9 @@ public final class CoSocket implements Closeable {
     // 读索引到最后就要clear一下
     private int prepareReadableBytes() throws IOException {
         if (!readBuffer.isReadable()) {
+            if (isEof) {
+                return -1;
+            }
             readBuffer.clear();
             SocketChannel channel = eventHandler.getSocketChannel();
             int i;
@@ -1144,7 +1144,7 @@ public final class CoSocket implements Closeable {
     //写发生阻塞的时候,最小的阻塞时间,配合的还有一个,多少毫秒每K数据的堵塞时间,
     // 总的允许的阻塞时间为 initial + N(K) * MilliSecondPer1024B
     //我们不允许无限堵塞的发生,超过时间就会抛出SocketTimeOutException
-    public void setInitialBlockMilliSeconds(int minBlockingTime) {
+    public void setInitialFlushBlockMilliSeconds(int minBlockingTime) {
         this.config.setInitialBlockMilliSeconds(minBlockingTime);
     }
 
@@ -1152,7 +1152,7 @@ public final class CoSocket implements Closeable {
         this.config.setMilliSecondPer1024B(per1024B);
     }
 
-    public long getInitialBlockMilliSeconds() {
+    public long getInitialFlushBlockMilliSeconds() {
         return this.config.getInitialBlockMilliSeconds();
     }
 

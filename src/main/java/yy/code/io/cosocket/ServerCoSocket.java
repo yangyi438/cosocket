@@ -94,6 +94,7 @@ public class ServerCoSocket {
         Socket socket = serverSocketChannel.socket().accept();
         SocketChannel channel = socket.getChannel();
         try {
+            channel.configureBlocking(false);
             return new CoSocket(channel, new CoSocketConfig(), this.eventLoopGroup.nextCoSocketEventLoop());
         } catch (IOException e) {
             if (LOGGER.isTraceEnabled()) {
