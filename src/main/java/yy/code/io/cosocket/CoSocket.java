@@ -539,6 +539,10 @@ public final class CoSocket implements Closeable {
     //fixme 我们不会挂起线程,等到关闭操作被IO线程操作并真实的发生,并且等待回馈,这样有代价,
     //大多情况我们认为这样是没有意义的,关闭的时候发生了异常又如何,提升效率,牺牲了一些东西
     public void shutdownInput() throws IOException {
+        if (isClosed()) {
+            //已经关闭就忽略
+            return;
+        }
         checkConnectOrClose();
         if (isInputCLose) {
             return;
@@ -571,6 +575,10 @@ public final class CoSocket implements Closeable {
     }
 
     public void shutdownOutput() throws IOException {
+        if (isClosed()) {
+            //已经关闭了的话,就忽略关闭out的操作
+            return;
+        }
         checkConnectOrClose();
         if (isOutPutCLose) {
             return;

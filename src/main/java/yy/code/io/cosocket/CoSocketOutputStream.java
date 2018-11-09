@@ -35,8 +35,7 @@ public class CoSocketOutputStream extends OutputStream {
 
 
     public void close() throws IOException {
-        //关闭之前手动刷新一波
-        socket.flush(true);
+        //取消手动刷新了 调用者需要自己手动调用flush 操作
         socket.shutdownOutput();
     }
 }

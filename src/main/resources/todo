@@ -1,0 +1,11 @@
+唤醒就直接由io线程修改状态机,
+
+
+代码重构,注意selectKey为空的情况,server.acceptor ,然后要判断这种情况
+
+代码写的太烂了,真的很需要重构 非常需要
+重构代码
+
+abstract  ----- read Write Connect And  Timeout Handler
+
+coSocketChannel status control
