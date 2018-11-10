@@ -736,6 +736,10 @@ public final class CoSocket implements Closeable {
     }
 
     private void blockForReadWithTimeOut() throws IOException {
+        int soTimeout = this.config.getSoTimeout();
+        if (soTimeout <= 0) {
+            throw new SocketTimeoutException("readTimeout because SoTimeout < = 0");
+        }
         //当前读要被挂起了,所以我们要记录,因为没数据读而挂起的频率,防止频繁的切换导致浪费cpu
         blockingRW.reportReadBlock();
         //阻塞当前线程,然后一直等可读事件发生,超过超时时间就抛出超时异常
@@ -753,7 +757,7 @@ public final class CoSocket implements Closeable {
                 break;
             }
         }
-        this.eventHandler.timeoutForReadActive(eventHandler.readTimeoutHandler, this.config.getSoTimeout());
+        this.eventHandler.timeoutForReadActive(eventHandler.readTimeoutHandler, soTimeout);
         //挂起当前线程
         ssSupport.suspend();
         int now = status.get();
