@@ -32,7 +32,7 @@ public class NioChannelEventHandlerAdapter extends AbstractNioChannelEventHandle
     private static final ConnectEventHandler IGNORE_CONNECT = new ConnectEventHandler() {
         @Override
         public void connectEventHandler(SelectionKey selectionKey, SocketChannel channel, CoSocketEventLoop eventLoop) {
-            SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_READ);
+            SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_CONNECT);
         }
     };
 
