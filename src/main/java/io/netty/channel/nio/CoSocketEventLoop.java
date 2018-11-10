@@ -2,7 +2,6 @@
 package io.netty.channel.nio;
 
 import io.netty.channel.*;
-import io.netty.channel.Channel;
 import io.netty.util.IntSupplier;
 import io.netty.util.concurrent.RejectedExecutionHandler;
 import io.netty.util.internal.PlatformDependent;
@@ -15,7 +14,10 @@ import yy.code.io.cosocket.eventloop.CoSocketEventLoopGroup;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.nio.channels.*;
+import java.nio.channels.CancelledKeyException;
+import java.nio.channels.SelectableChannel;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
 import java.nio.channels.spi.SelectorProvider;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
@@ -104,6 +106,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
 
     private final SelectorProvider provider;
 
+    private volatile int eventHandlerCounter = 0;
     /**
      * Boolean that controls determines if a blocked Selector.select should
      * break out of its selection process. In our case we use a timeout for
@@ -133,6 +136,19 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
         unwrappedSelector = selectorTuple.unwrappedSelector;
         selectStrategy = strategy;
     }
+
+    void incrementEventCounter() {
+        eventHandlerCounter++;
+    }
+
+    void decrementEventCounter(){
+        eventHandlerCounter--;
+    }
+
+    public long getEventHandlerCounter() {
+        return eventHandlerCounter;
+    }
+
 
     private static final class SelectorTuple {
         final Selector unwrappedSelector;
@@ -254,36 +270,37 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
         }
     }
 
-    /**
-     * Registers an arbitrary {@link SelectableChannel}, not necessarily created by Netty, to the {@link Selector}
-     * of this event loop.  Once the specified {@link SelectableChannel} is registered, the specified {@code task} will
-     * be executed by this event loop when the {@link SelectableChannel} is ready.
-     */
-    public void register(final SelectableChannel ch, final int interestOps, final NioTask<?> task) {
-        if (ch == null) {
-            throw new NullPointerException("ch");
-        }
-        if (interestOps == 0) {
-            throw new IllegalArgumentException("interestOps must be non-zero.");
-        }
-        if ((interestOps & ~ch.validOps()) != 0) {
-            throw new IllegalArgumentException(
-                    "invalid interestOps: " + interestOps + "(validOps: " + ch.validOps() + ')');
-        }
-        if (task == null) {
-            throw new NullPointerException("task");
-        }
-
-        if (isShutdown()) {
-            throw new IllegalStateException("event loop shut down");
-        }
-
-        try {
-            ch.register(selector, interestOps, task);
-        } catch (Exception e) {
-            throw new EventLoopException("failed to register a channel", e);
-        }
-    }
+    //fixme nioTask就不需要了,阉割掉这个功能
+//    /**
+//     * Registers an arbitrary {@link SelectableChannel}, not necessarily created by Netty, to the {@link Selector}
+//     * of this event loop.  Once the specified {@link SelectableChannel} is registered, the specified {@code task} will
+//     * be executed by this event loop when the {@link SelectableChannel} is ready.
+//     */
+//    public void register(final SelectableChannel ch, final int interestOps, final NioTask<?> task) {
+//        if (ch == null) {
+//            throw new NullPointerException("ch");
+//        }
+//        if (interestOps == 0) {
+//            throw new IllegalArgumentException("interestOps must be non-zero.");
+//        }
+//        if ((interestOps & ~ch.validOps()) != 0) {
+//            throw new IllegalArgumentException(
+//                    "invalid interestOps: " + interestOps + "(validOps: " + ch.validOps() + ')');
+//        }
+//        if (task == null) {
+//            throw new NullPointerException("task");
+//        }
+//
+//        if (isShutdown()) {
+//            throw new IllegalStateException("event loop shut down");
+//        }
+//
+//        try {
+//            ch.register(selector, interestOps, task);
+//        } catch (Exception e) {
+//            throw new EventLoopException("failed to register a channel", e);
+//        }
+//    }
 
     /**
      * Returns the percentage of the desired amount of time spent for I/O in the event loop.
@@ -465,9 +482,8 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             }
             // Always handle shutdown even if the loop processing threw an exception.
             try {
-                if (isShuttingDown()) {
+                if (isShuttingDown() && getEventHandlerCounter() <= 0) {
                     closeAll();
-                    //todo shutDown方法要改变,适应我们的CoSocketChannel
                     if (confirmShutdown()) {
                         return;
                     }
@@ -507,7 +523,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
         }
     }
 
-    public void cancel(SelectionKey key) {
+    void cancel(SelectionKey key) {
         key.cancel();
         cancelledKeys++;
         if (cancelledKeys >= CLEANUP_INTERVAL) {
@@ -787,7 +803,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
         }
     }
 
-    public Selector unwrappedSelector() {
+    Selector unwrappedSelector() {
         return unwrappedSelector;
     }
 

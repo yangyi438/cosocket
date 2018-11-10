@@ -1,6 +1,7 @@
 package yy.code.io.cosocket;
 
 import io.netty.channel.nio.CoSocketEventLoop;
+import io.netty.channel.nio.CoSocketRegisterUtils;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -102,7 +103,7 @@ public abstract class AbstractNioChannelEventHandler implements EventHandler {
             //对于SoLinger有特殊的处理的方法
             if (channel.isOpen() && channel.socket().getSoLinger() > 0) {
                 if (selectionKey != null) {
-                    eventLoop.cancel(selectionKey);
+                    CoSocketRegisterUtils.deRegister(eventLoop,selectionKey);
                 }
             }
             executor = GlobalEventExecutor.INSTANCE;

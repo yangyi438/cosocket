@@ -2,6 +2,7 @@ package yy.code.io.cosocket;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.nio.CoSocketEventLoop;
+import io.netty.channel.nio.CoSocketRegisterUtils;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -9,6 +10,7 @@ import yy.code.io.cosocket.config.CoSocketConfig;
 import yy.code.io.cosocket.status.BitIntStatusUtils;
 import yy.code.io.cosocket.status.CoSocketStatus;
 import yy.code.io.cosocket.status.SelectionKeyUtils;
+
 import java.io.IOException;
 import java.net.Socket;
 import java.net.SocketAddress;
@@ -90,7 +92,7 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
                 SelectionKeyUtils.removeOps(selectionKey, SelectionKey.OP_CONNECT);
             } catch (IOException e) {
                 try {
-                    eventLoop.cancel(selectionKey);
+                    CoSocketRegisterUtils.deRegister(eventLoop(), selectionKey);
                     channel.close();
                     //CoSocketChannel的相关的部分的资源已经释放完毕了
                     coSocket.isHandlerRelease = true;
@@ -199,7 +201,7 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
         if (selectionKey == null) {
             //第一次还没有注册的情况
             try {
-                selectionKey = socketChannel.register(eventLoop.unwrappedSelector(), listenOps, this);
+                selectionKey = CoSocketRegisterUtils.register(eventLoop(), socketChannel, listenOps, this);
             } catch (Exception e) {
                 if (logger.isTraceEnabled()) {
                     logger.trace("register for read happen error .", e);
