@@ -2,7 +2,6 @@ package yy.code.io.cosocket;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.nio.CoSocketEventLoop;
-import io.netty.util.concurrent.GlobalEventExecutor;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -17,7 +16,6 @@ import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
-import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -341,25 +339,7 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
             //防止重复进行close的方法了
             return;
         }
-        Executor executor = null;
-        try {
-            //对于SoLinger有特殊的处理的方法
-            if (channel.isOpen() && channel.socket().getSoLinger() > 0) {
-                if (selectionKey != null) {
-                    eventLoop.cancel(selectionKey);
-                }
-            }
-            executor = GlobalEventExecutor.INSTANCE;
-        } catch (Throwable ignore) {
-
-        }
-        if (executor == null) {
-            safeClose(channel);
-        } else {
-            //另外一个线程来执行这个方法,netty是这样做的,不是很明白,可能是close方法可能会线程阻塞
-            //先按照netty的来
-            executor.execute(() -> safeClose(channel));
-        }
+        SafeCloseEventLoopNioChannel(selectionKey,eventLoop, channel);
         this.isClose = true;
         if (connectTimeoutFuture != null) {
             connectTimeoutFuture.cancel(false);
@@ -407,15 +387,6 @@ public class CoSocketEventHandler extends AbstractNioChannelEventHandler {
         isClose = true;
     }
 
-    private static void safeClose(SocketChannel channel) {
-        try {
-            channel.close();
-        } catch (IOException e) {
-            if (logger.isInfoEnabled()) {
-                logger.info("close the channel happen error.", e);
-            }
-        }
-    }
 
     public void flushWriteBuffer() {
         if (!checkAndListenKey(SelectionKey.OP_WRITE, CoSocketStatus.PARK_FOR_WRITE, CoSocketStatus.WRITE_EXCEPTION)) {
