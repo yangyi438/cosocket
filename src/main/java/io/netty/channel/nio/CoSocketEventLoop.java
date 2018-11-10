@@ -775,6 +775,14 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             Object a = k.attachment();
             if (a instanceof AbstractNioChannel) {
                 channels.add((AbstractNioChannel) a);
+            } else if (a instanceof AbstractNioChannelEventHandler) {
+                try {
+                    ((AbstractNioChannelEventHandler) a).closeActive();
+                } catch (Throwable throwable) {
+                    if (logger.isErrorEnabled()) {
+                        logger.error("error close AbstractNioChannelEventHandler", throwable);
+                    }
+                }
             } else {
                 k.cancel();
                 @SuppressWarnings("unchecked")
