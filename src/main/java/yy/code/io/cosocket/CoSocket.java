@@ -70,7 +70,7 @@ public final class CoSocket implements Closeable {
         initDefault();
     }
 
-    CoSocket(SocketChannel channel, CoSocketConfig config, CoSocketEventLoop eventLoop) throws IOException {
+     public CoSocket(SocketChannel channel, CoSocketConfig config, CoSocketEventLoop eventLoop) throws IOException {
         initChannel(channel, config, eventLoop);
     }
 

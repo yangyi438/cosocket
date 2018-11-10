@@ -26,10 +26,5 @@ public final class CoSocketFactory {
 
     }
 
-    public static CoSocket createCoSocket(CoSocketEventLoopGroup eventLoopGroup) {
-        assert eventLoopGroup != null;
-        //todo
-        return null;
-    }
 
 }

@@ -3,6 +3,7 @@ package io.netty.channel.nio;
 import io.netty.util.internal.logging.InternalLogger;
 import io.netty.util.internal.logging.InternalLoggerFactory;
 import yy.code.io.cosocket.AbstractNioChannelEventHandler;
+import yy.code.io.cosocket.CoSocket;
 
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;

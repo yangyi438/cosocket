@@ -6,7 +6,7 @@
 
     <groupId>yy.code.io.cosocket</groupId>
     <artifactId>quasa-nettty-socket</artifactId>
-    <version>1.0.3-SNAPSHOT</version>
+    <version>1.0.4-SNAPSHOT</version>
     <build>
         <plugins>
             <plugin>

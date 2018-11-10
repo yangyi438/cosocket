@@ -7,10 +7,6 @@ package yy.code.io.cosocket.config;
 public final class CoSocketConfig {
 
 
-    //default 64k
-    private long maxInputBufferSize = 64*1024;
-    private int maxReadSizePerOnce;
-
     public int getMaxWriteSizePerOnce() {
         return maxWriteSizePerOnce;
     }
@@ -34,30 +30,6 @@ public final class CoSocketConfig {
     //200毫秒一k的数据,默认数据
     private int milliSecondPer1024B =200;
 
-    public void setMaxWriteBufferSIze(long maxWriteBufferSIze) {
-        this.maxWriteBufferSIze = maxWriteBufferSIze;
-    }
-
-    private long maxWriteBufferSIze = 64 * 1024;
-    public long getMaxInputBufferSize() {
-        return maxInputBufferSize;
-    }
-
-    public void setMaxInputBufferSize(long maxInputBufferSize) {
-        this.maxInputBufferSize = maxInputBufferSize;
-    }
-
-    public long getMaxWriteBufferSize() {
-        return maxWriteBufferSIze;
-    }
-
-    public int getMaxReadSizePerOnce() {
-        return maxReadSizePerOnce;
-    }
-
-    public void setMaxReadSizePerOnce(int maxReadSizePerOnce) {
-        this.maxReadSizePerOnce = maxReadSizePerOnce;
-    }
 
     public void setConnectionMilliSeconds(int connectionMilliSeconds) {
         this.connectionMilliSeconds = connectionMilliSeconds;
