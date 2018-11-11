@@ -6,9 +6,28 @@
 
     <groupId>yy.code.io.cosocket</groupId>
     <artifactId>quasa-nettty-socket</artifactId>
-    <version>1.0.7-SNAPSHOT</version>
+    <version>1.0.11-SNAPSHOT</version>
     <build>
         <plugins>
+
+            <!--<plugin>-->
+                <!--<groupId>com.vlkan</groupId>-->
+                <!--<artifactId>quasar-maven-plugin</artifactId>-->
+                <!--<version>0.7.9</version>-->
+                <!--<configuration>-->
+                    <!--<check>true</check>-->
+                    <!--<debug>true</debug>-->
+                    <!--<verbose>true</verbose>-->
+                <!--</configuration>-->
+                <!--<executions>-->
+                    <!--<execution>-->
+                        <!--<goals>-->
+                            <!--<goal>instrument</goal>-->
+                        <!--</goals>-->
+                    <!--</execution>-->
+                <!--</executions>-->
+            <!--</plugin>-->
+<!---javaagent:D:/quasar-core-0.7.9-jdk8.jar -Dco.paralleluniverse.fibers.verifyInstrumentation=true-->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -16,6 +35,7 @@
                     <source>8</source>
                     <target>8</target>
                 </configuration>
+                <version>3.1</version>
             </plugin>
         </plugins>
     </build>
@@ -30,6 +50,7 @@
             <groupId>co.paralleluniverse</groupId>
             <artifactId>quasar-core</artifactId>
             <version>0.7.9</version>
+            <classifier>jdk8</classifier>
         </dependency>
         <!-- Netty及其建议的反射依赖 -->
         <dependency>

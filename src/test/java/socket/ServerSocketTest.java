@@ -1,8 +1,10 @@
 package socket;
 
 import CoSocketUtils.ServerUtils;
+import co.paralleluniverse.fibers.Fiber;
 import yy.code.io.cosocket.CoSocket;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketTimeoutException;
@@ -15,14 +17,22 @@ import java.util.Random;
 public class ServerSocketTest {
     //测试发送数据和读数据是否相同
     public static void main(String[] args) throws IOException {
-        ServerUtils.StartCoServerAndAccept1Rw(8080);
-        try {
-            startClient();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
+        new Fiber<Void>(() -> {
+            try {
+                ServerUtils.StartCoServerAndAccept1Rw(8080);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }).start();
+        new Fiber<Void>(() -> {
+            try {
+                startClient();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
 
+    }
 
 
     private static void startClient() throws IOException {
@@ -43,13 +53,13 @@ public class ServerSocketTest {
 
             int count = 0;
             while (true) {
-              //  System.out.println(System.currentTimeMillis());
+                //  System.out.println(System.currentTimeMillis());
                 int read = 0;
                 try {
-                     read = coSocket.read(bytes2, count, bytes.length - count, true);
+                    read = coSocket.read(bytes2, count, bytes.length - count, true);
                 } catch (SocketTimeoutException e) {
                     e.printStackTrace();
-                  //  System.out.println(System.currentTimeMillis());
+                    //  System.out.println(System.currentTimeMillis());
                     System.exit(0);
                 }
                 count += read;
@@ -66,8 +76,8 @@ public class ServerSocketTest {
 
     private static void checkBytes(byte[] bytes, byte[] bytes2) {
         for (int i = 0; i < bytes.length; i++) {
-            if(bytes[i]!=bytes2[i]){
-                 System.out.println("error");
+            if (bytes[i] != bytes2[i]) {
+                System.out.println("error");
                 System.exit(0);
             }
 
