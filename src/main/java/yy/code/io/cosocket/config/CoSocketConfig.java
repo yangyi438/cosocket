@@ -6,6 +6,7 @@ package yy.code.io.cosocket.config;
  */
 public final class CoSocketConfig {
 
+    public static final int DEFAULT_TIMEOUT = 3000;
 
     public int getMaxWriteSizePerOnce() {
         return maxWriteSizePerOnce;
@@ -21,7 +22,7 @@ public final class CoSocketConfig {
     //连接超时默认就给3秒的时间了,我们的连接是必须要给连接超时的,不允许无限的不超时的连接
     private int connectionMilliSeconds = 3 * 1024;
     //三秒读超时的事件
-    private int soTimeout = 3000;
+    private int soTimeout = DEFAULT_TIMEOUT;
     private int sendBufferSize;
     private int receiveBufferSize;
 
