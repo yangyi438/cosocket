@@ -4,6 +4,7 @@ import yy.code.io.cosocket.CoSocket;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.SocketTimeoutException;
 
 /**

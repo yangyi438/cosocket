@@ -2,6 +2,7 @@ package socket;
 
 import CoSocketUtils.ServerUtils;
 import co.paralleluniverse.fibers.Fiber;
+import co.paralleluniverse.fibers.Suspendable;
 import yy.code.io.cosocket.CoSocket;
 
 import java.io.File;
@@ -16,7 +17,7 @@ import java.util.Random;
 
 public class ServerSocketTest {
     //测试发送数据和读数据是否相同
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, InterruptedException {
         new Fiber<Void>(() -> {
             try {
                 ServerUtils.StartCoServerAndAccept1Rw(8080);
@@ -31,12 +32,13 @@ public class ServerSocketTest {
                 e.printStackTrace();
             }
         }).start();
-
+        Thread.sleep(100000);
     }
 
-
+    @Suspendable
     private static void startClient() throws IOException {
         CoSocket coSocket = new CoSocket();
+        coSocket.setSoTimeout(1000);
         coSocket.setInitialFlushBlockMilliSeconds(100000);
         coSocket.connect(new InetSocketAddress("127.0.0.1", 8080));
         System.out.println("end connect");
@@ -59,6 +61,7 @@ public class ServerSocketTest {
                     read = coSocket.read(bytes2, count, bytes.length - count, true);
                 } catch (SocketTimeoutException e) {
                     e.printStackTrace();
+                     System.out.println("error------");
                     //  System.out.println(System.currentTimeMillis());
                     System.exit(0);
                 }

@@ -1,6 +1,7 @@
 package yy.code.io.cosocket;
 
 
+import co.paralleluniverse.fibers.Suspendable;
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.nio.CoSocketEventLoop;
 import io.netty.util.internal.logging.InternalLogger;
@@ -12,6 +13,7 @@ import yy.code.io.cosocket.status.CoSocketStatus;
 import yy.code.io.cosocket.status.SelectionKeyUtils;
 import yy.code.io.cosokcet.bytebuf.pool.GlobalByteBufPool;
 
+import javax.annotation.processing.SupportedSourceVersion;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,8 +27,19 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 
 public final class CoSocket implements Closeable {
-
     private static final InternalLogger LOGGER = InternalLoggerFactory.getInstance(CoSocket.class);
+
+    static {
+        //提前加载必备的相关类,防止运行时花费时间过多
+        try {
+            Class.forName("yy.code.io.cosokcet.bytebuf.pool.GlobalByteBufPool");
+            Class.forName("io.netty.channel.nio.CoSocketEventLoop");
+        } catch (ClassNotFoundException e) {
+            if (LOGGER.isErrorEnabled()) {
+                LOGGER.error("not fount ",e);
+            }
+        }
+    }
 
     Runnable delayWakeUpHandler = null;
 
@@ -164,11 +177,13 @@ public final class CoSocket implements Closeable {
 
     //这里我们允许连接超时,不能存在无限等待连接的情况
     //同时我们默认给3秒(很长了) 的连接超时时间,不允许无限的连接时间,就是不允许
+    @Suspendable
     public void connect(SocketAddress endpoint) throws IOException {
         connect(endpoint, 3 * 1000);
     }
 
     //mark
+    @Suspendable
     public void connect(SocketAddress endpoint, int timeout) throws IOException {
         if (endpoint == null)
             throw new IllegalArgumentException("connect: The address can't be null");
@@ -621,7 +636,7 @@ public final class CoSocket implements Closeable {
                                           int bandwidth) {
         getRealSocket().setPerformancePreferences(connectionTime, latency, bandwidth);
     }
-
+    @Suspendable
     public int write(int b, boolean block) throws IOException {
         prepareWriteBuf();
         prepareWritable();
@@ -649,6 +664,7 @@ public final class CoSocket implements Closeable {
     }
 
 
+    @Suspendable
     //block为true代表一定要刷新所有数据,否则,抛出io异常,或者超时异常,getLastWriteCount返回超时异常的时候,到底写了数据
     public int write(byte b[], int off, int len, boolean block) throws IOException {
         if (b == null) {
@@ -697,6 +713,7 @@ public final class CoSocket implements Closeable {
     //block代表会阻塞(挂起当前线程或者协程)的等待数据一直可用,直到读超时发生,抛出读超时异常,或者遇到eof
     //block为false的话,没有数据可读的话,就会直接返回0 代表没有任何数据可读
     //eof的话,我们就直接返回-1
+    @Suspendable
     public int read(byte[] b, int off, int length, boolean isBlock) throws IOException {
         if (b == null) {
             throw new NullPointerException();
@@ -735,6 +752,7 @@ public final class CoSocket implements Closeable {
         return read;
     }
 
+    @co.paralleluniverse.fibers.Suspendable
     private void blockForReadWithTimeOut() throws IOException {
         int soTimeout = this.config.getSoTimeout();
         if (soTimeout <= 0) {
@@ -775,6 +793,7 @@ public final class CoSocket implements Closeable {
      * @return 读取的的byte的数据, 会堵塞的读
      * @throws IOException
      */
+    @Suspendable
     public int readBytes() throws IOException {
         prepareReadBuf();
         int readableBytes = prepareReadableBytes();
@@ -855,7 +874,7 @@ public final class CoSocket implements Closeable {
         }
     }
 
-
+    @Suspendable
     public int flush(boolean blockForFlush) throws IOException {
         prepareWriteBuf();
         return flushInternal(blockForFlush);
@@ -865,6 +884,7 @@ public final class CoSocket implements Closeable {
      * @param block true will block to  flush all buffer to channel
      * @throws IOException
      */
+    @Suspendable
     private int flushInternal(boolean block) throws IOException {
         if (writeBuffer == null) {
             checkReadOrWritable(CoSocketStatus.WRITE_EXCEPTION, "write from channel already happen exception and already close read");
@@ -938,6 +958,7 @@ public final class CoSocket implements Closeable {
         }
     }
 
+    @co.paralleluniverse.fibers.Suspendable
     //等待写完缓冲区中所有的数据,或者写超时,然后就唤醒
     private void waitForFLushWriteBuffer() throws IOException {
         AtomicInteger status = this.status;

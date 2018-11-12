@@ -1,5 +1,7 @@
 package yy.code.io.cosocket;
 
+import co.paralleluniverse.fibers.Suspendable;
+
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -15,17 +17,17 @@ public final class CoSocketInputStream extends InputStream
     }
 
 
-
+    @Suspendable
     public int read(byte b[]) throws IOException {
         return read(b, 0, b.length);
     }
 
-
+    @Suspendable
     public int read(byte b[], int off, int length) throws IOException {
         return socket.read(b, off, length,true);
     }
 
-
+    @Suspendable
     public int read() throws IOException {
         return socket.readBytes();
     }
@@ -39,10 +41,6 @@ public final class CoSocketInputStream extends InputStream
         return socket.available();
     }
 
-    /**
-     * Closes input the stream.
-     */
-    private boolean closing = false;
 
     public void close() throws IOException {
         CoSocket socket = this.socket;

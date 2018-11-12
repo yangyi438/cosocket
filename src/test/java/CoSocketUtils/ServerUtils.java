@@ -1,5 +1,6 @@
 package CoSocketUtils;
 
+import co.paralleluniverse.fibers.Suspendable;
 import yy.code.io.cosocket.CoSocket;
 import yy.code.io.cosocket.ServerCoSocket;
 
@@ -14,6 +15,7 @@ import java.net.Socket;
  */
 public class ServerUtils {
 
+    @Suspendable
     public static void StartCoServerAndAccept1Rw(int port) throws IOException {
         ServerCoSocket serverSocket = new ServerCoSocket(port);
         new Thread(() -> {
@@ -22,6 +24,7 @@ public class ServerUtils {
                 while (true) {
                     accept = serverSocket.accept();
                     accept.setInitialFlushBlockMilliSeconds(10000);
+                    accept.setSoTimeout(1000);
                     InputStream inputStream = accept.getInputStream();
                     OutputStream outputStream = accept.getOutputStream();
                     int i;
