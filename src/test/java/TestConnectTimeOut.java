@@ -4,7 +4,6 @@ import yy.code.io.cosocket.CoSocket;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.Socket;
 import java.net.SocketTimeoutException;
 
 /**
@@ -15,8 +14,11 @@ public class TestConnectTimeOut {
         CoSocket coSocket = new CoSocket();
         InetSocketAddress endpoint = new InetSocketAddress("10.24.24.1", 8080);
         try {
-            coSocket.connect(endpoint);
+            System.out.println(System.currentTimeMillis());
+            coSocket.connect(endpoint, 2000);
+
         } catch (SocketTimeoutException e) {
+            System.out.println(System.currentTimeMillis());
             e.printStackTrace();
         }
         ServerUtils.StartCoServerAndAccept1Rw(8080);
