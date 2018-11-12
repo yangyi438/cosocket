@@ -26,10 +26,14 @@ public class GlobalByteBufPool {
 
     private static final int poolArrayLength = Integer.getInteger("GlobalByteBufPool.poolArrayLength.size", 16384);
 
+
     //通过当前线程hash获取其中一个的group
-    public static ConcurrentGroupByteBufPool getThreadHashGroup() {
+    public static ConcurrentGroupByteBufPool getThreadRandomGroup() {
         int i = Thread.currentThread().hashCode();
-        int index = i & (GROUP_SIZE - 1);
+        int randomNumber = RANDOM_NUMBER;
+        randomNumber++;
+        int index = (randomNumber+i) & (GROUP_SIZE - 1);
+        RANDOM_NUMBER++;
         return GROUP[index];
     }
 
@@ -41,9 +45,22 @@ public class GlobalByteBufPool {
 
     static final ConcurrentGroupByteBufPool[] GROUP;
 
-
     private static final AtomicInteger count = new AtomicInteger(0);
-
+    private static int pend1 = 0;
+    private static int pend2 = 0;
+    private static int pend3 = 0;
+    private static int pend4 = 0;
+    private static int pend5 = 0;
+    private static int pend6 = 0;
+    private static int pend7 = 0;
+    private static int RANDOM_NUMBER = 0;
+    private static int pend8 = 0;
+    private static int pend9 = 0;
+    private static int pend10 = 0;
+    private static int pend11 = 0;
+    private static int pend12 = 0;
+    private static int pend13 = 0;
+    private static int pend14 = 0;
     //简单的自己内置部分内存池,可恶的netty内存池和线程变量关联了,真的很蛋疼
     //同时我们采用了netty的内存泄露检测机制
     static {
@@ -60,7 +77,7 @@ public class GlobalByteBufPool {
         int groupPerSize = poolArrayLength / GROUP_SIZE;
         GROUP = new ConcurrentGroupByteBufPool[(int) GROUP_SIZE];
         for (int i = 0; i < GROUP_SIZE; i++) {
-            GROUP[i] = new ConcurrentGroupByteBufPool(i, groupPerSize + 1);
+            GROUP[i] = new ConcurrentGroupByteBufPool(i, (int) (groupPerSize * 1.5));
         }
 
         for (ConcurrentGroupByteBufPool pool : GROUP) {
@@ -84,12 +101,6 @@ public class GlobalByteBufPool {
                 }
             }
         }
-    }
-
-    public static ConcurrentGroupByteBufPool getOneGroupPool() {
-        int andIncrement = count.getAndIncrement();
-        long group = andIncrement % GROUP_SIZE;
-        return GROUP[(int) group];
     }
 
 }

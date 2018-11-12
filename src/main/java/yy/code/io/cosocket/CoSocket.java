@@ -13,7 +13,6 @@ import yy.code.io.cosocket.status.CoSocketStatus;
 import yy.code.io.cosocket.status.SelectionKeyUtils;
 import yy.code.io.cosokcet.bytebuf.pool.GlobalByteBufPool;
 
-import javax.annotation.processing.SupportedSourceVersion;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
@@ -835,7 +834,7 @@ public final class CoSocket implements Closeable {
                 throw new SocketException("input already close");
             }
             checkReadOrWritable(CoSocketStatus.READ_EXCEPTION, "read from channel already happen exception and already close read");
-            readBuffer = GlobalByteBufPool.getThreadHashGroup().applyDirect();
+            readBuffer = GlobalByteBufPool.getThreadRandomGroup().applyDirect();
         }
     }
 
@@ -847,7 +846,7 @@ public final class CoSocket implements Closeable {
                 throw new SocketException("outputStream already close");
             }
             checkReadOrWritable(CoSocketStatus.WRITE_EXCEPTION, "write from channel already happen exception and already close read");
-            writeBuffer = GlobalByteBufPool.getThreadHashGroup().applyDirect();
+            writeBuffer = GlobalByteBufPool.getThreadRandomGroup().applyDirect();
         }
     }
 
@@ -889,7 +888,7 @@ public final class CoSocket implements Closeable {
         if (writeBuffer == null) {
             checkReadOrWritable(CoSocketStatus.WRITE_EXCEPTION, "write from channel already happen exception and already close read");
             //writeBuffer为空的情况,直接就盛情一个
-            writeBuffer = GlobalByteBufPool.getThreadHashGroup().applyDirect();
+            writeBuffer = GlobalByteBufPool.getThreadRandomGroup().applyDirect();
         } else {
             int readableBytes = writeBuffer.readableBytes();
             if (readableBytes > 0) {

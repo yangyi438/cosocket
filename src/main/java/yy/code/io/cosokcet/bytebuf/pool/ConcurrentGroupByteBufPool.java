@@ -29,7 +29,7 @@ public class ConcurrentGroupByteBufPool {
     public ByteBuf applyDirect() {
         OwnWrappedByteBuf poll = byteBufs.poll();
         if (poll != null) {
-            //设定所属着
+            //设定owner
             poll.setOwnPool(this);
             poll.reInit();
             return poll;
@@ -65,7 +65,7 @@ public class ConcurrentGroupByteBufPool {
             while (true) {
                 number++;
                 int i = number & (GlobalByteBufPool.GROUP_SIZE-1);
-                boolean isSuccess = GlobalByteBufPool.GROUP[number].byteBufs.offer(buf);
+                boolean isSuccess = GlobalByteBufPool.GROUP[i].byteBufs.offer(buf);
                 if (isSuccess) {
                     return;
                 } else {
