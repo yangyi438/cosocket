@@ -40,14 +40,14 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
     private static final boolean DISABLE_KEYSET_OPTIMIZATION =
             SystemPropertyUtil.getBoolean("io.netty.noKeySetOptimization", false);
 
-    private static final ThreadLocal<WakeUpTime> WAKE_UP_TIME = new ThreadLocal<WakeUpTime>(){
+    private static final ThreadLocal<WakeUpTime> WAKE_UP_TIME = new ThreadLocal<WakeUpTime>() {
         @Override
         protected WakeUpTime initialValue() {
             return new WakeUpTime();
         }
     };
 
-    public static long getCurrentWakeUpTime(){
+    public static long getCurrentWakeUpTime() {
         return WAKE_UP_TIME.get().getCurrentNanoTime();
     }
 
@@ -122,7 +122,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
     private boolean needsToSelectAgain;
 
     public CoSocketEventLoop(CoSocketEventLoopGroup parent, Executor executor, SelectorProvider selectorProvider,
-                      SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler) {
+                             SelectStrategy strategy, RejectedExecutionHandler rejectedExecutionHandler) {
         super(parent, executor, false, DEFAULT_MAX_PENDING_TASKS, rejectedExecutionHandler);
         if (selectorProvider == null) {
             throw new NullPointerException("selectorProvider");
@@ -141,7 +141,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
         eventHandlerCounter++;
     }
 
-    void decrementEventCounter(){
+    void decrementEventCounter() {
         eventHandlerCounter--;
     }
 
@@ -482,6 +482,7 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
             }
             // Always handle shutdown even if the loop processing threw an exception.
             try {
+                //注册的CoSocket全部关闭之后才能正常关闭
                 if (isShuttingDown() && getEventHandlerCounter() <= 0) {
                     closeAll();
                     if (confirmShutdown()) {
@@ -784,10 +785,16 @@ public final class CoSocketEventLoop extends SingleThreadEventLoop {
                     }
                 }
             } else {
-                k.cancel();
-                @SuppressWarnings("unchecked")
-                NioTask<SelectableChannel> task = (NioTask<SelectableChannel>) a;
-                invokeChannelUnregistered(task, k, null);
+                try {
+                    k.cancel();
+                    @SuppressWarnings("unchecked")
+                    AbstractNioChannelEventHandler event = (AbstractNioChannelEventHandler) a;
+                    event.closeActive();
+                } catch (Throwable ignore) {
+                    if (logger.isErrorEnabled()) {
+                        logger.error("shutdown happen error.", ignore);
+                    }
+                }
             }
         }
 
